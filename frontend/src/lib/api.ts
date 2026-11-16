@@ -109,6 +109,33 @@ export type AuthUser = {
   google_connected: boolean;
   google_email: string | null;
   password_login_enabled: boolean;
+  first_name: string;
+  last_name: string;
+  phone_number: string | null;
+  onboarding_completed: boolean;
+  onboarding_skipped: boolean;
+  travel_preferences: UserTravelPreferences;
+};
+
+export type UserTravelPreferences = {
+  interests: string[];
+  styles: string[];
+  budget_preference: "budget" | "moderate" | "premium" | "luxury" | "flexible" | null;
+  daily_budget_inr: number | null;
+  transportation: string | null;
+  accommodation: string | null;
+  preferred_trip_duration_days: number | null;
+  travel_pace: "relaxed" | "balanced" | "fast" | null;
+};
+
+export type AccountTrip = {
+  id: number;
+  destination: string;
+  start_date: string;
+  end_date: string;
+  budget: number;
+  latest_itinerary: Record<string, unknown> | null;
+  created_at: string | null;
 };
 
 const apiBaseUrl = import.meta.env["VITE_API_BASE_URL"] ?? "http://localhost:8000";
@@ -155,6 +182,76 @@ export async function signIn(input: { email: string; password: string }) {
 
 export async function currentUser() {
   return request<{ user: AuthUser }>("/api/v1/auth/me");
+}
+
+export async function getProfile() {
+  return request<{ profile: AuthUser }>("/api/v1/account/profile");
+}
+
+export async function updateProfile(input: {
+  first_name: string;
+  last_name: string;
+  phone_number: string | null;
+}) {
+  return request<{ profile: AuthUser }>("/api/v1/account/profile", {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function getTravelPreferences() {
+  return request<{
+    preferences: UserTravelPreferences;
+    onboarding_completed: boolean;
+    onboarding_skipped: boolean;
+  }>("/api/v1/account/preferences");
+}
+
+export async function saveTravelPreferences(preferences: UserTravelPreferences) {
+  return request<{ preferences: UserTravelPreferences; onboarding_completed: boolean }>(
+    "/api/v1/account/preferences",
+    { method: "PUT", body: JSON.stringify(preferences) },
+  );
+}
+
+export async function completeOnboarding(preferences: UserTravelPreferences) {
+  return request<{ ok: boolean; onboarding_completed: boolean; user: AuthUser }>(
+    "/api/v1/account/onboarding/complete",
+    { method: "POST", body: JSON.stringify(preferences) },
+  );
+}
+
+export async function skipOnboarding(preferences?: UserTravelPreferences) {
+  return request<{ ok: boolean; onboarding_completed: boolean; onboarding_skipped: boolean }>(
+    "/api/v1/account/onboarding/skip",
+    { method: "POST", body: preferences ? JSON.stringify(preferences) : "{}" },
+  );
+}
+
+export async function getBookmarks() {
+  return request<{ items: Array<{ destination_id: string }> }>("/api/v1/account/bookmarks");
+}
+
+export async function addBookmark(destinationId: string) {
+  return request<{ destination_id: string }>(
+    `/api/v1/account/bookmarks/${encodeURIComponent(destinationId)}`,
+    {
+      method: "POST",
+    },
+  );
+}
+
+export async function removeBookmark(destinationId: string) {
+  return request<{ ok: boolean }>(
+    `/api/v1/account/bookmarks/${encodeURIComponent(destinationId)}`,
+    {
+      method: "DELETE",
+    },
+  );
+}
+
+export async function getUserTrips() {
+  return request<AccountTrip[]>("/api/v1/trips");
 }
 
 export async function signOut() {
@@ -204,7 +301,20 @@ export async function createAndOptimizeTrip(input: {
   const toIsoDate = (value: Date) => value.toISOString().slice(0, 10);
   const interestMap = Object.fromEntries(
     input.interests.map((interest) => [
-      interest === "Heritage" ? "history" : interest.toLowerCase(),
+      (
+        {
+          Heritage: "history",
+          "Heritage and History": "history",
+          "Food and Culinary Experiences": "food",
+          Mountains: "mountains",
+          "Mountains and Trekking": "mountains",
+          Beaches: "beaches",
+          "Nature and Wildlife": "nature",
+          "Spiritual and Cultural Travel": "spiritual",
+          "Relaxation and Wellness": "wellness",
+          "Road Trips": "road_trips",
+        } as Record<string, string>
+      )[interest] ?? interest.toLowerCase(),
       1,
     ]),
   );

@@ -3,15 +3,15 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Link2, Unlink } from "lucide-react";
 import { ProfileSection } from "@/components/layout/ProfileSection";
+import { TravelPreferencesSection } from "@/components/layout/TravelPreferencesSection";
+import { BookmarksSection } from "@/components/layout/BookmarksSection";
 import { PageHeader } from "@/components/travel/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useTheme } from "@/hooks/use-theme";
-import { destinations } from "@/data/destinations";
 import {
   currentUser,
   disconnectGoogleAccount,
@@ -39,8 +39,6 @@ export const Route = createFileRoute("/app/settings")({
   }),
   component: Settings,
 });
-
-const prefs = ["Heritage", "Food", "Mountains", "Slow travel", "Photography"];
 
 function Settings() {
   const { theme, toggle } = useTheme();
@@ -131,16 +129,7 @@ function Settings() {
         </TabsContent>
 
         <TabsContent value="preferences" className="mt-4 space-y-4">
-          <section className="surface space-y-4 p-6">
-            <h2 className="font-semibold">Travel preferences</h2>
-            <div className="flex flex-wrap gap-2">
-              {prefs.map((p) => (
-                <Badge key={p} variant="secondary" className="px-3 py-1.5">
-                  {p}
-                </Badge>
-              ))}
-            </div>
-          </section>
+          <TravelPreferencesSection />
           <section className="surface space-y-4 p-6">
             <h2 className="font-semibold">Appearance & notifications</h2>
             <div className="flex items-center justify-between gap-4">
@@ -159,28 +148,7 @@ function Settings() {
         </TabsContent>
 
         <TabsContent value="bookmarks" className="mt-4">
-          <section className="surface p-6">
-            <h2 className="font-semibold">Bookmarked destinations</h2>
-            <ul className="mt-4 grid gap-3 sm:grid-cols-2">
-              {destinations.slice(0, 6).map((d) => (
-                <li
-                  key={d.id}
-                  className="flex items-center gap-3 rounded-xl border border-border p-3"
-                >
-                  <img
-                    src={d.image}
-                    alt={d.name}
-                    loading="lazy"
-                    className="h-12 w-12 shrink-0 rounded-lg object-cover"
-                  />
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium">{d.name}</p>
-                    <p className="truncate text-xs text-muted-foreground">{d.state}</p>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </section>
+          <BookmarksSection />
         </TabsContent>
 
         <TabsContent value="account" className="mt-4 space-y-4">

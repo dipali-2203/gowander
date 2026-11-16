@@ -17,7 +17,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { createAndOptimizeTrip } from "@/lib/api";
+import { createAndOptimizeTrip, getTravelPreferences } from "@/lib/api";
 import { useTripStore } from "@/store/trip";
 import { toast } from "sonner";
 
@@ -35,7 +35,8 @@ export const Route = createFileRoute("/app/planner")({
       { property: "og:title", content: "Trip Planner · GoWander" },
       {
         property: "og:description",
-        content: "A guided multi-step form that turns your preferences into an optimised itinerary.",
+        content:
+          "A guided multi-step form that turns your preferences into an optimised itinerary.",
       },
     ],
   }),
@@ -46,12 +47,16 @@ const steps = ["Route", "Budget", "Travellers", "Style"] as const;
 const interests = [
   "Heritage",
   "Food",
+  "Mountains",
+  "Beaches",
   "Nature",
   "Adventure",
   "Photography",
   "Spiritual",
   "Nightlife",
   "Shopping",
+  "Road Trips",
+  "Wellness",
 ];
 const loadingSteps = [
   "Finding destinations…",
@@ -79,8 +84,55 @@ function Planner() {
     walkingTolerance: [0.5],
     crowdTolerance: [0.5],
     pace: [0.5],
-    picks: ["Heritage", "Food"] as string[],
+    picks: [] as string[],
   });
+
+  useEffect(() => {
+    let active = true;
+    getTravelPreferences()
+      .then(({ preferences }) => {
+        if (!active) return;
+        const interestAliases: Record<string, string> = {
+          "Heritage and History": "Heritage",
+          "Food and Culinary Experiences": "Food",
+          "Mountains and Trekking": "Mountains",
+          "Nature and Wildlife": "Nature",
+          "Spiritual and Cultural Travel": "Spiritual",
+          "Relaxation and Wellness": "Wellness",
+          "Road Trips": "Road Trips",
+        };
+        const selected = preferences.interests
+          .map((interest) => interestAliases[interest] ?? interest)
+          .filter((interest) => interests.includes(interest));
+        setForm((current) => ({
+          ...current,
+          picks: selected,
+          days: preferences.preferred_trip_duration_days ?? current.days,
+          budget: preferences.daily_budget_inr
+            ? [
+                preferences.daily_budget_inr *
+                  (preferences.preferred_trip_duration_days ?? current.days),
+              ]
+            : current.budget,
+          transport:
+            preferences.transportation?.toLowerCase() === "motorbike"
+              ? "mixed"
+              : (preferences.transportation?.toLowerCase() ?? current.transport),
+          pace:
+            preferences.travel_pace === "relaxed"
+              ? [0.25]
+              : preferences.travel_pace === "fast"
+                ? [0.8]
+                : current.pace,
+        }));
+      })
+      .catch(() => {
+        // The trip planner remains usable when profile preferences are unavailable.
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!generating) return;
@@ -114,7 +166,13 @@ function Planner() {
           transport: form.transport,
         },
       });
-      setGenerated(result.itinerary, destination, result.alternatives, result.attractions, result.annealing);
+      setGenerated(
+        result.itinerary,
+        destination,
+        result.alternatives,
+        result.attractions,
+        result.annealing,
+      );
       setPhase(0);
       setGenerating(true);
     } catch (error) {
@@ -215,7 +273,9 @@ function Planner() {
                       value={form.to}
                       onChange={(e) => setForm({ ...form, to: e.target.value })}
                     />
-                    <p className="text-xs text-muted-foreground">Synthetic planning catalogs are currently available for Jaipur and Udaipur.</p>
+                    <p className="text-xs text-muted-foreground">
+                      Synthetic planning catalogs are currently available for Jaipur and Udaipur.
+                    </p>
                   </div>
                 </div>
                 <div className="space-y-2">
@@ -339,20 +399,50 @@ function Planner() {
                 </div>
                 <div className="grid gap-5 sm:grid-cols-2">
                   <div className="space-y-2">
-                    <Label>Risk tolerance — {Math.round((form.riskTolerance[0] ?? 0) * 100)}%</Label>
-                    <Slider min={0} max={1} step={0.1} value={form.riskTolerance} onValueChange={(v) => setForm({ ...form, riskTolerance: v })} />
+                    <Label>
+                      Risk tolerance — {Math.round((form.riskTolerance[0] ?? 0) * 100)}%
+                    </Label>
+                    <Slider
+                      min={0}
+                      max={1}
+                      step={0.1}
+                      value={form.riskTolerance}
+                      onValueChange={(v) => setForm({ ...form, riskTolerance: v })}
+                    />
                   </div>
                   <div className="space-y-2">
-                    <Label>Walking tolerance — {Math.round((form.walkingTolerance[0] ?? 0) * 100)}%</Label>
-                    <Slider min={0} max={1} step={0.1} value={form.walkingTolerance} onValueChange={(v) => setForm({ ...form, walkingTolerance: v })} />
+                    <Label>
+                      Walking tolerance — {Math.round((form.walkingTolerance[0] ?? 0) * 100)}%
+                    </Label>
+                    <Slider
+                      min={0}
+                      max={1}
+                      step={0.1}
+                      value={form.walkingTolerance}
+                      onValueChange={(v) => setForm({ ...form, walkingTolerance: v })}
+                    />
                   </div>
                   <div className="space-y-2">
-                    <Label>Crowd tolerance — {Math.round((form.crowdTolerance[0] ?? 0) * 100)}%</Label>
-                    <Slider min={0} max={1} step={0.1} value={form.crowdTolerance} onValueChange={(v) => setForm({ ...form, crowdTolerance: v })} />
+                    <Label>
+                      Crowd tolerance — {Math.round((form.crowdTolerance[0] ?? 0) * 100)}%
+                    </Label>
+                    <Slider
+                      min={0}
+                      max={1}
+                      step={0.1}
+                      value={form.crowdTolerance}
+                      onValueChange={(v) => setForm({ ...form, crowdTolerance: v })}
+                    />
                   </div>
                   <div className="space-y-2">
                     <Label>Travel pace — {Math.round((form.pace[0] ?? 0) * 100)}%</Label>
-                    <Slider min={0} max={1} step={0.1} value={form.pace} onValueChange={(v) => setForm({ ...form, pace: v })} />
+                    <Slider
+                      min={0}
+                      max={1}
+                      step={0.1}
+                      value={form.pace}
+                      onValueChange={(v) => setForm({ ...form, pace: v })}
+                    />
                   </div>
                 </div>
                 <div className="rounded-xl bg-muted/60 p-4 text-sm">

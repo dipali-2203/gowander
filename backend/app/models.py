@@ -1,7 +1,7 @@
 
 from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, JSON, String
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, JSON, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -42,6 +42,10 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(256))
     password_login_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     google_subject: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True, index=True)
+    phone_number: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    onboarding_completed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    onboarding_skipped: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    travel_preferences: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     role: Mapped[str] = mapped_column(String(20), default="user")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
@@ -75,6 +79,16 @@ class PasswordResetToken(Base):
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class DestinationBookmark(Base):
+    __tablename__ = "destination_bookmarks"
+    __table_args__ = (UniqueConstraint("user_id", "destination_id", name="uq_bookmark_user_destination"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    destination_id: Mapped[str] = mapped_column(String(100), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 class Attraction(Base):

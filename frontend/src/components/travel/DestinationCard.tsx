@@ -1,5 +1,14 @@
 import { motion } from "motion/react";
-import { Star, Clock, CalendarDays, Ticket, Plus, Sparkles } from "lucide-react";
+import {
+  Star,
+  Clock,
+  CalendarDays,
+  Ticket,
+  Plus,
+  Sparkles,
+  Bookmark,
+  BookmarkCheck,
+} from "lucide-react";
 import type { Destination } from "@/data/destinations";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -8,10 +17,14 @@ export function DestinationCard({
   destination,
   onAdd,
   onOpen,
+  bookmarked = false,
+  onBookmark,
 }: {
   destination: Destination;
   onAdd?: (d: Destination) => void;
   onOpen?: (d: Destination) => void;
+  bookmarked?: boolean;
+  onBookmark?: (d: Destination) => void;
 }) {
   return (
     <motion.article
@@ -35,7 +48,9 @@ export function DestinationCard({
             className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
           />
           <div className="absolute left-3 top-3 flex gap-2">
-            <Badge className="bg-card text-card-foreground shadow-soft">{destination.category}</Badge>
+            <Badge className="bg-card text-card-foreground shadow-soft">
+              {destination.category}
+            </Badge>
             {destination.hiddenGem && (
               <Badge className="bg-amber text-amber-foreground">
                 <Sparkles className="mr-1 h-3 w-3" /> Hidden gem
@@ -74,11 +89,30 @@ export function DestinationCard({
           </div>
         </dl>
 
-        {onAdd && (
-          <Button size="sm" className="w-full" onClick={() => onAdd(destination)}>
-            <Plus className="h-4 w-4" /> Add to trip
-          </Button>
-        )}
+        <div className="flex gap-2">
+          {onAdd && (
+            <Button size="sm" className="flex-1" onClick={() => onAdd(destination)}>
+              <Plus className="h-4 w-4" /> Add to trip
+            </Button>
+          )}
+          {onBookmark && (
+            <Button
+              size="icon"
+              variant="outline"
+              aria-label={
+                bookmarked ? `Remove ${destination.name} bookmark` : `Bookmark ${destination.name}`
+              }
+              aria-pressed={bookmarked}
+              onClick={() => onBookmark(destination)}
+            >
+              {bookmarked ? (
+                <BookmarkCheck className="h-4 w-4" />
+              ) : (
+                <Bookmark className="h-4 w-4" />
+              )}
+            </Button>
+          )}
+        </div>
       </div>
     </motion.article>
   );

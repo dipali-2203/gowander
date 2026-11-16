@@ -40,6 +40,28 @@ from app.services.annealing import generate_annealed_itinerary
 router = APIRouter(prefix="/api/v1/trips", tags=["Trips"], dependencies=[Depends(require_trip_access)])
 
 
+@router.get("")
+def list_trips(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    trips = (
+        db.query(Trip)
+        .filter(Trip.owner_user_id == user.id)
+        .order_by(Trip.created_at.desc(), Trip.id.desc())
+        .all()
+    )
+    return [
+        {
+            "id": trip.id,
+            "destination": trip.destination,
+            "start_date": str(trip.start_date),
+            "end_date": str(trip.end_date),
+            "budget": trip.budget,
+            "latest_itinerary": trip.latest_itinerary,
+            "created_at": trip.created_at.isoformat() if trip.created_at else None,
+        }
+        for trip in trips
+    ]
+
+
 @router.post("", status_code=201)
 def create_trip(
     request: TripCreate,

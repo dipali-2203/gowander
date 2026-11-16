@@ -164,7 +164,7 @@ export function AuthPage({ mode }: { mode: AuthMode }) {
                 <Input
                   id="name"
                   name="name"
-                  placeholder="Aarav Sharma"
+                  placeholder="Your full name"
                   autoComplete="name"
                   required
                 />

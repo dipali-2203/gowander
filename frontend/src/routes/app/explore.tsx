@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { Search, Sparkles, Star, X, Plus } from "lucide-react";
+import { Search, Sparkles, Star, X, Plus, Bookmark, BookmarkCheck } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/travel/PageHeader";
 import { DestinationCard } from "@/components/travel/DestinationCard";
@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/select";
 import { destinations, states, categories, type Destination } from "@/data/destinations";
 import { useTripStore } from "@/store/trip";
+import { addBookmark, getBookmarks, removeBookmark } from "@/lib/api";
 
 export const Route = createFileRoute("/app/explore")({
   head: () => ({
@@ -47,7 +48,17 @@ function Explore() {
   const [budget, setBudget] = useState("all");
   const [duration, setDuration] = useState("all");
   const [active, setActive] = useState<Destination | null>(null);
+  const [bookmarkedIds, setBookmarkedIds] = useState<string[]>([]);
+  const [bookmarkBusy, setBookmarkBusy] = useState<string | null>(null);
   const add = useTripStore((s) => s.add);
+
+  useEffect(() => {
+    getBookmarks()
+      .then(({ items }) => setBookmarkedIds(items.map((item) => item.destination_id)))
+      .catch(() => {
+        toast.error("Could not load your saved destinations.");
+      });
+  }, []);
 
   const results = useMemo(
     () =>
@@ -71,6 +82,30 @@ function Explore() {
   const onAdd = (d: Destination) => {
     add(d);
     toast.success(`${d.name} added to your trip`);
+  };
+
+  const onBookmark = async (d: Destination) => {
+    if (bookmarkBusy) return;
+    setBookmarkBusy(d.id);
+    const alreadyBookmarked = bookmarkedIds.includes(d.id);
+    try {
+      if (alreadyBookmarked) {
+        await removeBookmark(d.id);
+        setBookmarkedIds((current) => current.filter((id) => id !== d.id));
+        toast.success(`${d.name} removed from bookmarks`);
+      } else {
+        await addBookmark(d.id);
+        setBookmarkedIds((current) => [...current, d.id]);
+        toast.success(`${d.name} saved to bookmarks`);
+      }
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "Could not update your bookmarks.");
+      getBookmarks()
+        .then(({ items }) => setBookmarkedIds(items.map((item) => item.destination_id)))
+        .catch(() => undefined);
+    } finally {
+      setBookmarkBusy(null);
+    }
   };
 
   return (
@@ -123,9 +158,30 @@ function Explore() {
                     <Badge variant="secondary">{active.entryFee}</Badge>
                     <Badge variant="secondary">{active.duration}</Badge>
                   </div>
-                  <Button size="sm" className="mt-1" onClick={() => onAdd(active)}>
-                    <Plus className="h-4 w-4" /> Add to trip
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button size="sm" className="mt-1" onClick={() => onAdd(active)}>
+                      <Plus className="h-4 w-4" /> Add to trip
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="outline"
+                      className="mt-1"
+                      aria-pressed={bookmarkedIds.includes(active.id)}
+                      aria-label={
+                        bookmarkedIds.includes(active.id)
+                          ? `Remove ${active.name} bookmark`
+                          : `Bookmark ${active.name}`
+                      }
+                      disabled={bookmarkBusy === active.id}
+                      onClick={() => void onBookmark(active)}
+                    >
+                      {bookmarkedIds.includes(active.id) ? (
+                        <BookmarkCheck className="h-4 w-4" />
+                      ) : (
+                        <Bookmark className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </div>
                 </div>
               </motion.div>
             )}
@@ -215,7 +271,14 @@ function Explore() {
 
           <div className="grid gap-4 sm:grid-cols-2">
             {results.map((d) => (
-              <DestinationCard key={d.id} destination={d} onAdd={onAdd} onOpen={setActive} />
+              <DestinationCard
+                key={d.id}
+                destination={d}
+                onAdd={onAdd}
+                onOpen={setActive}
+                bookmarked={bookmarkedIds.includes(d.id)}
+                onBookmark={onBookmark}
+              />
             ))}
           </div>
         </div>

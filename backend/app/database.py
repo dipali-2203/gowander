@@ -80,3 +80,28 @@ def migrate_auth_schema() -> None:
         connection.execute(text(
             "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_google_subject ON users (google_subject)"
         ))
+
+
+def migrate_user_profile_schema() -> None:
+    """Add profile and onboarding columns to existing user tables safely."""
+    inspector = inspect(engine)
+    if "users" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("users")}
+    sqlite = engine.dialect.name == "sqlite"
+    bool_false = "0" if sqlite else "FALSE"
+    bool_true = "1" if sqlite else "TRUE"
+    with engine.begin() as connection:
+        if "phone_number" not in columns:
+            connection.execute(text("ALTER TABLE users ADD COLUMN phone_number VARCHAR(30)"))
+        if "onboarding_completed" not in columns:
+            # Existing users are treated as onboarded; new registrations set it false.
+            connection.execute(text(
+                f"ALTER TABLE users ADD COLUMN onboarding_completed BOOLEAN NOT NULL DEFAULT {bool_true}"
+            ))
+        if "onboarding_skipped" not in columns:
+            connection.execute(text(
+                f"ALTER TABLE users ADD COLUMN onboarding_skipped BOOLEAN NOT NULL DEFAULT {bool_false}"
+            ))
+        if "travel_preferences" not in columns:
+            connection.execute(text("ALTER TABLE users ADD COLUMN travel_preferences JSON NOT NULL DEFAULT '{}'"))

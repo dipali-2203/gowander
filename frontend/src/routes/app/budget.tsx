@@ -1,23 +1,10 @@
-import { createFileRoute } from "@tanstack/react-router";
-import {
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
-  Tooltip,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Legend,
-} from "recharts";
-import { Lightbulb, TrendingDown, Wallet, PiggyBank } from "lucide-react";
-import { PageHeader } from "@/components/travel/PageHeader";
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
+import { CalendarDays, Wallet } from "lucide-react";
+import { PageHeader, EmptyState } from "@/components/travel/PageHeader";
 import { StatCard } from "@/components/travel/StatCard";
-import { Progress } from "@/components/ui/progress";
-import { Badge } from "@/components/ui/badge";
-import { budgetBreakdown, spendByDay, savingsTips } from "@/data/trips";
+import { Button } from "@/components/ui/button";
+import { getUserTrips, type AccountTrip } from "@/lib/api";
 
 export const Route = createFileRoute("/app/budget")({
   head: () => ({
@@ -25,142 +12,98 @@ export const Route = createFileRoute("/app/budget")({
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
       { title: "Budget Dashboard · GoWander" },
-      {
-        name: "description",
-        content:
-          "Expense breakdown, planned versus actual spend, budget health and AI savings suggestions for your trip.",
-      },
-      { property: "og:title", content: "Budget Dashboard · GoWander" },
-      {
-        property: "og:description",
-        content: "Track trip spending across accommodation, transport, food and tickets.",
-      },
+      { name: "description", content: "Review the planned budgets for your trips." },
     ],
   }),
   component: Budget,
 });
 
-const total = budgetBreakdown.reduce((a, b) => a + b.value, 0);
-const spent = spendByDay.reduce((a, b) => a + b.actual, 0);
-
 function Budget() {
+  const [trips, setTrips] = useState<AccountTrip[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    getUserTrips()
+      .then((items) => {
+        if (active) setTrips(items);
+      })
+      .catch((cause) => {
+        if (active)
+          setError(cause instanceof Error ? cause.message : "Could not load your trip budgets.");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const total = trips.reduce((sum, trip) => sum + trip.budget, 0);
+
   return (
     <div className="space-y-6">
       <PageHeader
         title="Budget dashboard"
-        description="Where the money goes, and where the AI thinks you can claw some back."
+        description="Planned budgets from the trips in your account."
       />
-
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Planned budget" value={total} prefix="₹" icon={<Wallet className="h-4.5 w-4.5" />} />
-        <StatCard label="Spent so far" value={spent} prefix="₹" icon={<TrendingDown className="h-4.5 w-4.5" />} />
-        <StatCard
-          label="Projected savings"
-          value={4300}
-          prefix="₹"
-          icon={<PiggyBank className="h-4.5 w-4.5" />}
-          hint="If you apply 2 suggestions"
+      {error && (
+        <p className="surface p-4 text-sm text-destructive" role="alert">
+          {error}
+        </p>
+      )}
+      {loading ? (
+        <div className="surface p-6 text-sm text-muted-foreground" role="status">
+          Loading your budgets…
+        </div>
+      ) : trips.length === 0 ? (
+        <EmptyState
+          title="No trip budgets yet."
+          description="Create a trip to see its planned budget here."
+          action={
+            <Button asChild>
+              <Link to="/app/planner">Plan a trip</Link>
+            </Button>
+          }
         />
-        <StatCard label="Daily average" value={Math.round(spent / spendByDay.length)} prefix="₹" />
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        <section className="surface p-5">
-          <h2 className="font-semibold">Expense breakdown</h2>
-          <div className="mt-2 h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={budgetBreakdown}
-                  dataKey="value"
-                  nameKey="name"
-                  innerRadius={70}
-                  outerRadius={110}
-                  paddingAngle={3}
-                >
-                  {budgetBreakdown.map((b) => (
-                    <Cell key={b.name} fill={b.color} stroke="var(--color-card)" strokeWidth={2} />
-                  ))}
-                </Pie>
-                <Tooltip
-                  formatter={(v: number) => `₹${v.toLocaleString("en-IN")}`}
-                  contentStyle={{
-                    background: "var(--color-card)",
-                    border: "1px solid var(--color-border)",
-                    borderRadius: 12,
-                  }}
-                />
-                <Legend verticalAlign="bottom" iconType="circle" />
-              </PieChart>
-            </ResponsiveContainer>
+      ) : (
+        <>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <StatCard
+              label="Planned budgets"
+              value={total}
+              prefix="₹"
+              icon={<Wallet className="h-4.5 w-4.5" />}
+              hint="Across your trips"
+            />
+            <StatCard
+              label="Trips"
+              value={trips.length}
+              icon={<CalendarDays className="h-4.5 w-4.5" />}
+              hint="In your account"
+            />
           </div>
-        </section>
-
-        <section className="surface p-5">
-          <h2 className="font-semibold">Planned vs actual</h2>
-          <div className="mt-2 h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={spendByDay} margin={{ left: -18, right: 6, top: 12 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
-                <XAxis dataKey="day" tickLine={false} axisLine={false} fontSize={12} />
-                <YAxis tickLine={false} axisLine={false} fontSize={12} />
-                <Tooltip
-                  formatter={(v: number) => `₹${v.toLocaleString("en-IN")}`}
-                  contentStyle={{
-                    background: "var(--color-card)",
-                    border: "1px solid var(--color-border)",
-                    borderRadius: 12,
-                  }}
-                />
-                <Legend iconType="circle" />
-                <Bar dataKey="planned" fill="var(--color-chart-1)" radius={[6, 6, 0, 0]} />
-                <Bar dataKey="actual" fill="var(--color-chart-2)" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </section>
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        <section className="surface space-y-4 p-5">
-          <div className="flex items-center justify-between">
-            <h2 className="font-semibold">Budget health</h2>
-            <Badge className="bg-success text-success-foreground">On track</Badge>
-          </div>
-          <div>
-            <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Used</span>
-              <span className="font-medium">
-                ₹{spent.toLocaleString("en-IN")} of ₹{total.toLocaleString("en-IN")}
-              </span>
-            </div>
-            <Progress value={(spent / total) * 100} className="mt-2 h-2.5" />
-          </div>
-          <ul className="space-y-3 pt-1">
-            {budgetBreakdown.map((b) => (
-              <li key={b.name} className="space-y-1">
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">{b.name}</span>
-                  <span>{Math.round((b.value / total) * 100)}%</span>
+          <section className="surface divide-y divide-border p-5">
+            <h2 className="pb-3 font-semibold">Trip budgets</h2>
+            {trips.map((trip) => (
+              <div key={trip.id} className="flex flex-wrap items-center justify-between gap-3 py-4">
+                <div>
+                  <h3 className="font-medium">{trip.destination}</h3>
+                  <p className="text-sm text-muted-foreground">
+                    {trip.start_date} – {trip.end_date}
+                  </p>
                 </div>
-                <Progress value={(b.value / total) * 100} className="h-1.5" />
-              </li>
+                <p className="font-semibold">₹{trip.budget.toLocaleString("en-IN")}</p>
+              </div>
             ))}
-          </ul>
-        </section>
-
-        <section className="surface space-y-3 p-5">
-          <h2 className="font-semibold">Savings suggestions</h2>
-          <ul className="space-y-3">
-            {savingsTips.map((t) => (
-              <li key={t} className="flex gap-3 rounded-xl bg-muted/60 p-3 text-sm">
-                <Lightbulb className="mt-0.5 h-4 w-4 shrink-0 text-amber" />
-                <span>{t}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      </div>
+            <p className="pt-4 text-xs text-muted-foreground">
+              This view shows planned trip budgets. The app does not yet track actual expenses.
+            </p>
+          </section>
+        </>
+      )}
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { motion } from "motion/react";
 import {
@@ -14,12 +14,11 @@ import {
   Share2,
 } from "lucide-react";
 import { toast } from "sonner";
-import { PageHeader } from "@/components/travel/PageHeader";
+import { EmptyState, PageHeader } from "@/components/travel/PageHeader";
 import { IndiaMap } from "@/components/travel/IndiaMap";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { itinerary, budgetBreakdown } from "@/data/trips";
 import { useTripStore } from "@/store/trip";
 import {
   loadConditions,
@@ -126,29 +125,41 @@ function Itinerary() {
       toast.error(error instanceof Error ? error.message : "Could not save feedback.");
     }
   };
-  const generatedDay = generated
-    ? generated.days.map((day) => ({
-        day: day.day_number,
-        city: generatedDestination ?? "Generated itinerary",
-        date: `${day.date} · baseline plan · synthetic attraction catalog`,
-        weather: "Estimated",
-        temp: `Risk ${(generated.risk_score * 100).toFixed(0)}%`,
-        travelTime: `${day.total_travel_minutes} min`,
-        distance: `${day.reserved_break_minutes} min reserved for meals`,
-        hotel: "Accommodation is outside this baseline optimizer",
-        cost: day.total_cost,
-        slots: day.stops.map((stop) => ({
-          time: "Activity" as const,
-          title: stop.name,
-          detail: `${stop.arrival_minute}–${stop.departure_minute} min · ${stop.travel_minutes_before} min travel${stop.wait_minutes ? ` · ${stop.wait_minutes} min wait` : ""}`,
-          cost: stop.cost,
-        })),
-      }))
-    : itinerary;
-  const total = generated?.total_cost ?? itinerary.reduce((a, d) => a + d.cost, 0);
-  const displayBreakdown = generated
-    ? [{ name: "Attractions", value: generated.total_cost, color: "var(--color-chart-1)" }]
-    : budgetBreakdown;
+  if (!generated) {
+    return (
+      <EmptyState
+        title="No itinerary open yet."
+        description="Create a trip plan to generate an itinerary for your travel dates and preferences."
+        action={
+          <Button asChild>
+            <Link to="/app/planner">Plan a trip</Link>
+          </Button>
+        }
+      />
+    );
+  }
+
+  const generatedDay = generated.days.map((day) => ({
+    day: day.day_number,
+    city: generatedDestination ?? "Generated itinerary",
+    date: `${day.date} · baseline plan · synthetic attraction catalog`,
+    weather: "Estimated",
+    temp: `Risk ${(generated.risk_score * 100).toFixed(0)}%`,
+    travelTime: `${day.total_travel_minutes} min`,
+    distance: `${day.reserved_break_minutes} min reserved for meals`,
+    hotel: "Accommodation is outside this baseline optimizer",
+    cost: day.total_cost,
+    slots: day.stops.map((stop) => ({
+      time: "Activity" as const,
+      title: stop.name,
+      detail: `${stop.arrival_minute}–${stop.departure_minute} min · ${stop.travel_minutes_before} min travel${stop.wait_minutes ? ` · ${stop.wait_minutes} min wait` : ""}`,
+      cost: stop.cost,
+    })),
+  }));
+  const total = generated.total_cost;
+  const displayBreakdown = [
+    { name: "Attractions", value: generated.total_cost, color: "var(--color-chart-1)" },
+  ];
 
   return (
     <div className="space-y-6">
@@ -156,13 +167,9 @@ function Itinerary() {
         title={
           generatedDestination
             ? `${generatedDestination} baseline itinerary`
-            : "Royal Rajasthan Loop"
+            : "Generated itinerary"
         }
-        description={
-          generated
-            ? `Greedy baseline · ${generated.feasible ? "feasible" : "infeasible"} · ${generated.data_source} inputs`
-            : "4 days · Jaipur → Udaipur → Kumbhalgarh · generated 2 hours ago"
-        }
+        description={`Greedy baseline · ${generated.feasible ? "feasible" : "infeasible"} · ${generated.data_source} inputs`}
         actions={
           <>
             <Button variant="outline" onClick={() => toast("Editing mode is a demo stub")}>

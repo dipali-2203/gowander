@@ -1,13 +1,13 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Send, Sparkles, User } from "lucide-react";
-import { PageHeader } from "@/components/travel/PageHeader";
+import { EmptyState, PageHeader } from "@/components/travel/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { itinerary } from "@/data/trips";
+import { useTripStore } from "@/store/trip";
 
 export const Route = createFileRoute("/app/assistant")({
   head: () => ({
@@ -33,24 +33,28 @@ export const Route = createFileRoute("/app/assistant")({
 type Message = { id: number; role: "user" | "ai"; text: string };
 
 const prompts = [
-  "Reduce budget by 20%",
-  "Replace Udaipur with Jodhpur",
-  "Add Goa for 3 days",
-  "Find hidden gems nearby",
-  "Regenerate Day 2",
+  "Suggest a lower-cost alternative",
+  "Change the trip pace",
+  "Add a food stop",
+  "Suggest places nearby",
+  "What should I pack?",
 ];
 
 const replies: Record<string, string> = {
   default:
-    "Done. I re-ran the route optimiser and kept your evening slots intact — the timeline on the right reflects the change.",
+    "I can help brainstorm options. To apply changes to an itinerary, update your trip in the planner and generate it again.",
 };
 
 function Assistant() {
+  const generated = useTripStore((state) => state.generated);
+  const destination = useTripStore((state) => state.generatedDestination);
   const [messages, setMessages] = useState<Message[]>([
     {
       id: 1,
       role: "ai",
-      text: "Your Rajasthan loop is ready. I can trim costs, swap cities or rebuild any single day — just say the word.",
+      text: generated
+        ? `Your ${destination ?? "trip"} itinerary is open. What would you like to explore?`
+        : "Tell me what kind of trip you have in mind, or start by creating a plan in Trip Planner.",
     },
   ]);
   const [input, setInput] = useState("");
@@ -79,7 +83,7 @@ function Assistant() {
     <div className="space-y-5">
       <PageHeader
         title="AI Assistant"
-        description="Ask for changes in plain language. Edits apply to the live itinerary."
+        description="Get ideas for a trip and review the itinerary you generated."
       />
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
@@ -179,23 +183,37 @@ function Assistant() {
         <aside className="surface-static space-y-3 p-5 lg:sticky lg:top-24 lg:self-start">
           <div className="flex items-center justify-between">
             <h2 className="font-semibold">Itinerary preview</h2>
-            <Badge variant="secondary">Live</Badge>
+            <Badge variant="secondary">{generated ? "Current plan" : "No plan"}</Badge>
           </div>
-          <ol className="space-y-3">
-            {itinerary.map((d) => (
-              <li key={d.day} className="rounded-xl border border-border p-3">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="font-medium">
-                    Day {d.day} · {d.city}
-                  </span>
-                  <span className="text-muted-foreground">₹{d.cost.toLocaleString("en-IN")}</span>
-                </div>
-                <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">
-                  {d.slots.map((s) => s.title).join(" · ")}
-                </p>
-              </li>
-            ))}
-          </ol>
+          {generated ? (
+            <ol className="space-y-3">
+              {generated.days.map((day) => (
+                <li key={day.day_number} className="rounded-xl border border-border p-3">
+                  <div className="flex items-center justify-between gap-2 text-sm">
+                    <span className="font-medium">
+                      Day {day.day_number} · {day.date}
+                    </span>
+                    <span className="text-muted-foreground">
+                      ₹{day.total_cost.toLocaleString("en-IN")}
+                    </span>
+                  </div>
+                  <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                    {day.stops.map((stop) => stop.name).join(" · ") || "No stops in this day"}
+                  </p>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <EmptyState
+              title="No itinerary yet."
+              description="Create a trip to see your itinerary here."
+              action={
+                <Button asChild size="sm">
+                  <Link to="/app/planner">Open Trip Planner</Link>
+                </Button>
+              }
+            />
+          )}
         </aside>
       </div>
     </div>

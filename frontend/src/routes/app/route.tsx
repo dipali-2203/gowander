@@ -2,6 +2,8 @@ import { createFileRoute, Outlet, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import { currentUser, signOut, type AuthUser } from "@/lib/api";
+import { AuthContext } from "@/lib/auth-context";
+import { useTripStore } from "@/store/trip";
 
 export const Route = createFileRoute("/app")({
   component: AppLayout,
@@ -11,15 +13,24 @@ function AppLayout() {
   const navigate = useNavigate();
   const [user, setUser] = useState<AuthUser | null>(null);
   const [checking, setChecking] = useState(true);
+  const clearTripState = useTripStore((state) => state.clear);
 
   useEffect(() => {
     let active = true;
+    clearTripState();
     currentUser()
       .then(({ user: authenticatedUser }) => {
-        if (active) setUser(authenticatedUser);
+        if (!active) return;
+        setUser(authenticatedUser);
+        if (!authenticatedUser.onboarding_completed && !authenticatedUser.onboarding_skipped) {
+          void navigate({ to: "/app/onboarding", replace: true });
+        }
       })
       .catch(() => {
-        if (active) void navigate({ to: "/login", replace: true });
+        if (active) {
+          clearTripState();
+          void navigate({ to: "/login", replace: true });
+        }
       })
       .finally(() => {
         if (active) setChecking(false);
@@ -27,13 +38,14 @@ function AppLayout() {
     return () => {
       active = false;
     };
-  }, [navigate]);
+  }, [navigate, clearTripState]);
 
   const logout = async () => {
     try {
       await signOut();
     } finally {
       setUser(null);
+      clearTripState();
       await navigate({ to: "/login", replace: true });
     }
   };
@@ -49,8 +61,10 @@ function AppLayout() {
       </div>
     );
   return (
-    <AppShell user={user} onLogout={logout}>
-      <Outlet />
-    </AppShell>
+    <AuthContext.Provider value={{ user, setUser }}>
+      <AppShell user={user} onLogout={logout}>
+        <Outlet />
+      </AppShell>
+    </AuthContext.Provider>
   );
 }

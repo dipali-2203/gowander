@@ -1,6 +1,6 @@
 
 from datetime import date, datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -15,6 +15,46 @@ class Preferences(BaseModel):
     budget_sensitivity: float = Field(default=0.5, ge=0, le=1)
     travel_pace: float = Field(default=0.5, ge=0, le=1)
     preferred_transport: str = Field(default="mixed", max_length=30)
+
+
+PreferenceChoice = Annotated[str, Field(min_length=1, max_length=80)]
+
+
+class TravelPreferences(BaseModel):
+    interests: list[PreferenceChoice] = Field(default_factory=list, max_length=12)
+    styles: list[PreferenceChoice] = Field(default_factory=list, max_length=8)
+    budget_preference: Literal["budget", "moderate", "premium", "luxury", "flexible"] | None = None
+    daily_budget_inr: int | None = Field(default=None, ge=0, le=5_000_000)
+    transportation: str | None = Field(default=None, max_length=40)
+    accommodation: str | None = Field(default=None, max_length=40)
+    preferred_trip_duration_days: int | None = Field(default=None, ge=1, le=60)
+    travel_pace: Literal["relaxed", "balanced", "fast"] | None = None
+
+    @model_validator(mode="after")
+    def normalize_selections(self):
+        self.interests = list(dict.fromkeys(item.strip() for item in self.interests if item.strip()))
+        self.styles = list(dict.fromkeys(item.strip() for item in self.styles if item.strip()))
+        return self
+
+
+class ProfileUpdate(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    first_name: str = Field(min_length=1, max_length=60)
+    last_name: str = Field(default="", max_length=60)
+    phone_number: str | None = Field(default=None, max_length=30)
+
+    @model_validator(mode="after")
+    def validate_profile(self):
+        self.first_name = self.first_name.strip()
+        self.last_name = self.last_name.strip()
+        if not self.first_name:
+            raise ValueError("First name is required.")
+        if len(f"{self.first_name} {self.last_name}".strip()) > 100:
+            raise ValueError("The full name must be 100 characters or fewer.")
+        if self.phone_number is not None:
+            self.phone_number = self.phone_number.strip() or None
+        return self
 
 
 class TripCreate(BaseModel):

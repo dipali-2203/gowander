@@ -24,6 +24,7 @@ from starlette.responses import RedirectResponse
 
 from app.database import get_db
 from app.models import AuthSession, OAuthLinkChallenge, PasswordResetToken, User
+from app.schemas import TravelPreferences
 
 from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2 import id_token as google_id_token
@@ -91,6 +92,7 @@ def _token_digest(token: str) -> str:
 
 
 def _public_user(user: User) -> dict[str, object]:
+    name_parts = user.name.split(maxsplit=1)
     return {
         "id": user.id,
         "name": user.name,
@@ -99,6 +101,12 @@ def _public_user(user: User) -> dict[str, object]:
         "google_connected": bool(user.google_subject),
         "google_email": user.email if user.google_subject else None,
         "password_login_enabled": user.password_login_enabled,
+        "phone_number": user.phone_number,
+        "first_name": name_parts[0] if name_parts else "",
+        "last_name": name_parts[1] if len(name_parts) > 1 else "",
+        "onboarding_completed": user.onboarding_completed,
+        "onboarding_skipped": user.onboarding_skipped,
+        "travel_preferences": TravelPreferences.model_validate(user.travel_preferences or {}).model_dump(),
     }
 
 
@@ -244,7 +252,15 @@ def signup(payload: SignupRequest, request: Request, response: Response, db: Ses
     email = _normalize_email(payload.email)
     if db.scalar(select(User.id).where(User.email == email)) is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="An account with this email already exists.")
-    user = User(name=payload.name.strip(), email=email, password_hash=_hash_password(payload.password), role="user")
+    user = User(
+        name=payload.name.strip(),
+        email=email,
+        password_hash=_hash_password(payload.password),
+        onboarding_completed=False,
+        onboarding_skipped=False,
+        travel_preferences={},
+        role="user",
+    )
     db.add(user)
     try:
         db.commit()
@@ -586,6 +602,9 @@ def google_callback(
             password_hash=_hash_password(secrets.token_urlsafe(48)),
             password_login_enabled=False,
             google_subject=subject,
+            onboarding_completed=False,
+            onboarding_skipped=False,
+            travel_preferences={},
         )
         db.add(user)
     user.email = email
