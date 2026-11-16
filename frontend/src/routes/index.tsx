@@ -1,0 +1,526 @@
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { motion } from "motion/react";
+import { useLayoutEffect, type MouseEvent } from "react";
+import {
+  Sparkles,
+  Route as RouteIcon,
+  Wallet,
+  Gem,
+  MessagesSquare,
+  BedDouble,
+  Star,
+  ArrowRight,
+  Sun,
+  Moon,
+  MapPin,
+  ArrowUpRight,
+} from "lucide-react";
+import heroImage from "@/assets/udaipur-hero.jpg";
+import { useTheme } from "@/hooks/use-theme";
+import { IndiaMap } from "@/components/travel/IndiaMap";
+import { Logo } from "@/components/layout/AppShell";
+import { Button } from "@/components/ui/button";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+
+export const Route = createFileRoute("/")({
+  head: () => ({
+    meta: [
+      { title: "GoWander — Plan Your Perfect Journey Across India" },
+      {
+        name: "description",
+        content:
+          "Generate personalized itineraries, optimize travel routes, discover hidden gems and estimate budgets for trips across India with AI.",
+      },
+      { property: "og:title", content: "GoWander — AI travel planner for India" },
+      {
+        property: "og:description",
+        content:
+          "Personalized itineraries, optimized routes, hotel picks, budgets and hidden gems across India.",
+      },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary_large_image" },
+    ],
+  }),
+  component: Landing,
+});
+
+const features = [
+  {
+    icon: RouteIcon,
+    title: "Route optimisation",
+    text: "The planner sequences cities by drive time, not by guesswork — fewer backtracks, more daylight.",
+  },
+  {
+    icon: Sparkles,
+    title: "AI itineraries",
+    text: "Morning, afternoon and evening blocks with realistic travel buffers and opening hours.",
+  },
+  {
+    icon: Wallet,
+    title: "Budget estimates",
+    text: "Per-day costs across stay, transport, food and tickets, with savings suggestions.",
+  },
+  {
+    icon: Gem,
+    title: "Hidden gems",
+    text: "Anegundi over Hampi's main strip, Dawki over Shillong's queues. Places locals actually name.",
+  },
+  {
+    icon: BedDouble,
+    title: "Stay matching",
+    text: "Hotels ranked by distance to your planned activities rather than by commission.",
+  },
+  {
+    icon: MessagesSquare,
+    title: "Conversational edits",
+    text: "“Cut ₹10,000” or “swap Day 3 for Jodhpur” — the whole plan re-flows instantly.",
+  },
+];
+
+const steps = [
+  {
+    n: "01",
+    t: "Tell us the shape of the trip",
+    d: "Cities, days, budget, travellers, interests.",
+  },
+  {
+    n: "02",
+    t: "AI drafts and optimises",
+    d: "Destinations, routes, hotels and costs in under a minute.",
+  },
+  {
+    n: "03",
+    t: "Refine by conversation",
+    d: "Adjust anything in plain language, then export or share.",
+  },
+];
+
+const testimonials = [
+  {
+    name: "Nikhil Menon",
+    role: "Product designer, Bengaluru",
+    text: "Planned a nine-day Spiti circuit in one sitting. The drive-time estimates were the first ones I've seen that matched reality.",
+  },
+  {
+    name: "Sara Qureshi",
+    role: "Doctor, Hyderabad",
+    text: "I asked it to cut ₹15,000 from a Kerala trip and it rebuilt the stays without touching the parts I cared about.",
+  },
+  {
+    name: "Devika Rao",
+    role: "Founder, Pune",
+    text: "The hidden gems section is the reason I keep coming back. Anegundi was the best day of our Hampi trip.",
+  },
+];
+
+const faqs = [
+  {
+    q: "Does GoWander book hotels or tickets?",
+    a: "No. We deliberately stay out of booking. The platform plans the trip — routes, days, stays, costs — and you book wherever you prefer.",
+  },
+  {
+    q: "How accurate are the budget estimates?",
+    a: "Estimates use seasonal averages per city and travel class. They land within about 10–15% for most domestic trips and update as you edit the plan.",
+  },
+  {
+    q: "Can I edit a generated itinerary?",
+    a: "Every day, slot and stay is editable, either directly in the timeline or by asking the AI assistant to change it.",
+  },
+  {
+    q: "Does it cover the whole country?",
+    a: "Yes — from Ladakh to the Andamans, including the Northeast, which most planners skip entirely.",
+  },
+  {
+    q: "Can I plan a trip for any budget?",
+    a: "Yes. Set your total budget and travel style, and GoWander balances transport, stays, food and activities around it.",
+  },
+  {
+    q: "How long does it take to generate a trip?",
+    a: "Your first itinerary is ready in under a minute. You can then refine the route, stays and activities in plain language.",
+  },
+  {
+    q: "Can I plan trips with multiple destinations?",
+    a: "Yes. Add as many cities and stops as you like, and the planner sequences them to reduce unnecessary travel and backtracking.",
+  },
+  {
+    q: "Can I save and share my itinerary?",
+    a: "Yes. Save trips to your account and share the complete day-by-day plan with your travel companions.",
+  },
+];
+
+const sectionReveal = {
+  initial: { opacity: 0, y: 28 },
+  whileInView: { opacity: 1, y: 0 },
+  viewport: { once: true, amount: 0.15 },
+  transition: { duration: 1, ease: "easeOut" as const },
+};
+
+function Landing() {
+  const { theme, toggle } = useTheme();
+
+  useLayoutEffect(() => {
+    const previousScrollRestoration = window.history.scrollRestoration;
+    window.history.scrollRestoration = "manual";
+    window.history.replaceState(null, "", window.location.pathname);
+    window.scrollTo(0, 0);
+
+    return () => {
+      window.history.scrollRestoration = previousScrollRestoration;
+    };
+  }, []);
+
+  const scrollToSection = (event: MouseEvent<HTMLAnchorElement>) => {
+    const targetId = event.currentTarget.getAttribute("href");
+    if (!targetId?.startsWith("#")) return;
+
+    const target = document.querySelector(targetId);
+    if (!target) return;
+
+    event.preventDefault();
+    const header = document.querySelector("header");
+    const headerHeight = header?.getBoundingClientRect().height ?? 0;
+    const startPosition = window.scrollY;
+    const targetPosition = window.scrollY + target.getBoundingClientRect().top - headerHeight - 16;
+    const distance = targetPosition - startPosition;
+    const duration = 900;
+    const startTime = performance.now();
+
+    const animateScroll = (currentTime: number) => {
+      const progress = Math.min((currentTime - startTime) / duration, 1);
+      const easedProgress = 1 - Math.pow(1 - progress, 3);
+      window.scrollTo(0, startPosition + distance * easedProgress);
+
+      if (progress < 1) {
+        window.requestAnimationFrame(animateScroll);
+      }
+    };
+
+    window.requestAnimationFrame(animateScroll);
+    window.history.pushState(null, "", targetId);
+  };
+
+  return (
+    <div className="landing-page min-h-dvh bg-background">
+      <header className="landing-navbar fixed inset-x-0 top-0 z-40 border-b border-border/70 bg-background/80 backdrop-blur-xl">
+        <div className="mx-auto flex h-[4.5rem] w-full items-center justify-between gap-5 px-5 sm:px-8 lg:px-12 xl:px-16">
+          <Logo />
+          <nav aria-label="Primary" className="hidden items-center gap-7 text-sm md:flex">
+            <a
+              href="#features"
+              onClick={scrollToSection}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              Features
+            </a>
+            <a
+              href="#how"
+              onClick={scrollToSection}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              How it works
+            </a>
+            <a
+              href="#preview"
+              onClick={scrollToSection}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              Product
+            </a>
+            <a
+              href="#faq"
+              onClick={scrollToSection}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              FAQ
+            </a>
+          </nav>
+          <div className="landing-nav-actions flex shrink-0 items-center gap-1.5">
+            <Button
+              className="h-9 w-9"
+              variant="ghost"
+              size="icon"
+              onClick={toggle}
+              aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            >
+              {theme === "dark" ? <Sun /> : <Moon />}
+            </Button>
+            <Button asChild variant="ghost" size="sm" className="h-9">
+              <Link to="/login">Log in</Link>
+            </Button>
+            <Button asChild size="sm" className="h-9">
+              <Link to="/signup">
+                Get started <ArrowUpRight />
+              </Link>
+            </Button>
+          </div>
+        </div>
+      </header>
+
+      <main>
+        <section className="relative isolate h-[100svh] min-h-[620px] overflow-hidden bg-photo-overlay text-photo-foreground">
+          <img
+            src={theme === "dark" ? "/landing-dark.png" : heroImage}
+            alt="Lake Pichola and Udaipur’s marble palaces in morning light"
+            width={1920}
+            height={1024}
+            fetchPriority="high"
+            className="absolute inset-0 -z-20 h-full w-full object-cover object-center"
+          />
+          <div className="absolute inset-0 -z-10 bg-photo-overlay/50" />
+          <div className="relative mx-auto h-full w-full px-5 sm:px-8 lg:px-12 xl:px-16">
+            <motion.div
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.6 }}
+              className="absolute left-1/2 top-[14%] flex w-[calc(100%-2.5rem)] max-w-2xl -translate-x-1/2 flex-col items-center space-y-4 text-center sm:top-[16%] sm:w-[calc(100%-4rem)]"
+            >
+              <p className="flex items-center gap-2 text-sm font-medium text-photo-muted">
+                <span className="h-1.5 w-1.5 rounded-full bg-teal" /> A little less planning. A lot
+                more India.
+              </p>
+              <div className="space-y-4">
+                <h1 className="hero-wordmark font-mugle font-bold leading-tight">GoWander</h1>
+              </div>
+            </motion.div>
+            <p className="hero-subtitle absolute bottom-[29%] left-1/2 -translate-x-1/2 text-lg font-normal leading-snug text-photo-foreground sm:bottom-[28%] sm:text-xl">
+              Your next great Indian journey.
+            </p>
+            <div className="hero-actions absolute bottom-[18%] left-1/2 flex -translate-x-1/2 flex-wrap justify-center gap-4">
+              <Button asChild size="lg" className="h-12">
+                <Link to="/app/planner">
+                  Plan my trip <ArrowRight />
+                </Link>
+              </Button>
+              <Button
+                asChild
+                variant="outline"
+                size="lg"
+                className="h-12 border-photo-foreground/40 bg-photo-foreground/10 text-photo-foreground backdrop-blur-sm hover:bg-photo-foreground/20 hover:text-photo-foreground"
+              >
+                <Link to="/app/explore">
+                  Explore India <ArrowUpRight />
+                </Link>
+              </Button>
+            </div>
+            <div className="hero-meta absolute bottom-[7%] left-5 right-5 flex flex-wrap items-end justify-between gap-6 border-t border-photo-foreground/25 pt-6 sm:bottom-[8%] sm:left-8 sm:right-8 lg:left-12 lg:right-12 xl:left-16 xl:right-16">
+              <div className="flex flex-wrap gap-x-7 gap-y-3 text-xs text-photo-muted sm:text-sm">
+                <span className="flex items-center gap-2">
+                  <RouteIcon className="h-4 w-4" /> Your route
+                </span>
+                <span className="flex items-center gap-2">
+                  <Wallet className="h-4 w-4" /> Your budget
+                </span>
+                <span className="flex items-center gap-2">
+                  <Sparkles className="h-4 w-4" /> Your kind of trip
+                </span>
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <MapPin className="h-4 w-4" />
+                <span>
+                  {theme === "dark" ? "Vestrahorn mountain, Iceland" : "Udaipur, Rajasthan"}
+                </span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Features */}
+        <motion.section
+          id="features"
+          {...sectionReveal}
+          className="mx-auto w-full px-5 py-20 sm:px-8 lg:px-12 xl:px-16"
+        >
+          <div className="max-w-2xl">
+            <h2 className="text-3xl font-semibold tracking-tight sm:text-4xl">
+              Every detail. One beautiful journey.
+            </h2>
+            <p className="mt-3 text-muted-foreground">
+              A thoughtful route, the right stays, and room for the unexpected.
+            </p>
+          </div>
+          <div className="mt-12 grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+            {features.map((f, i) => (
+              <motion.article
+                key={f.title}
+                initial={{ opacity: 0, y: 18 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true, margin: "-60px" }}
+                transition={{ duration: 0.8, delay: i * 0.12 }}
+                className="feature-card group min-h-full"
+              >
+                <span className="grid h-10 w-10 place-items-center rounded-lg bg-primary-soft text-primary transition-colors group-hover:bg-primary group-hover:text-primary-foreground">
+                  <f.icon className="h-5 w-5" />
+                </span>
+                <h3 className="mt-4 font-semibold">{f.title}</h3>
+                <p className="mt-1.5 text-sm text-muted-foreground">{f.text}</p>
+              </motion.article>
+            ))}
+          </div>
+        </motion.section>
+
+        {/* How it works */}
+        <motion.section id="how" {...sectionReveal} className="border-y border-border bg-card/60">
+          <div className="mx-auto w-full px-5 py-20 sm:px-8 lg:px-12 xl:px-16">
+            <h2 className="text-3xl font-semibold tracking-tight sm:text-4xl">How it works</h2>
+            <div className="mt-12 grid gap-7 md:grid-cols-3">
+              {steps.map((s, i) => (
+                <motion.div
+                  key={s.n}
+                  initial={{ opacity: 0, y: 18 }}
+                  whileInView={{ opacity: 1, y: 0 }}
+                  viewport={{ once: true }}
+                  transition={{ duration: 0.8, delay: i * 0.16 }}
+                  className="how-step space-y-2"
+                >
+                  <div
+                    className="how-step-number flex items-center gap-4"
+                    aria-label={`Step ${s.n}`}
+                  >
+                    <span className="h-px flex-1 bg-border" />
+                    <span className="min-w-10 text-center text-sm font-semibold text-primary">
+                      {s.n}
+                    </span>
+                    <span className="h-px flex-1 bg-border" />
+                  </div>
+                  <h3 className="text-lg font-semibold">{s.t}</h3>
+                  <p className="text-sm text-muted-foreground">{s.d}</p>
+                </motion.div>
+              ))}
+            </div>
+          </div>
+        </motion.section>
+
+        {/* Screenshots */}
+        <motion.section
+          id="preview"
+          {...sectionReveal}
+          className="mx-auto w-full px-5 py-20 sm:px-8 lg:px-12 xl:px-16"
+        >
+          <h2 className="text-3xl font-semibold tracking-tight sm:text-4xl">Inside the product</h2>
+          <div className="mt-12 grid gap-6 lg:grid-cols-3">
+            {[
+              { title: "Explore", body: "Map plus filters", to: "/app/explore" as const },
+              { title: "Itinerary", body: "Day-by-day timeline", to: "/app/itinerary" as const },
+              { title: "Budget", body: "Spend analytics", to: "/app/budget" as const },
+            ].map((s, i) => (
+              <motion.div
+                key={s.title}
+                initial={{ opacity: 0, y: 18 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.8, delay: i * 0.14 }}
+                className="product-preview-card surface hover-lift overflow-hidden"
+              >
+                <div className="aurora h-44 border-b border-border p-4">
+                  <div className="h-full w-full">
+                    <IndiaMap showRoutes={i !== 2} />
+                  </div>
+                </div>
+                <div className="flex items-center justify-between gap-3 p-5">
+                  <div className="min-w-0">
+                    <h3 className="font-semibold">{s.title}</h3>
+                    <p className="truncate text-sm text-muted-foreground">{s.body}</p>
+                  </div>
+                  <Button asChild variant="outline" size="sm">
+                    <Link to={s.to}>Open</Link>
+                  </Button>
+                </div>
+              </motion.div>
+            ))}
+          </div>
+        </motion.section>
+
+        {/* Testimonials */}
+        <motion.section {...sectionReveal} className="border-y border-border bg-card/60">
+          <div className="mx-auto w-full px-5 py-20 sm:px-8 lg:px-12 xl:px-16">
+            <h2 className="text-3xl font-semibold tracking-tight sm:text-4xl">
+              Stories from the road
+            </h2>
+            <div className="mt-12 grid gap-6 md:grid-cols-3">
+              {testimonials.map((t, i) => (
+                <motion.figure
+                  key={t.name}
+                  initial={{ opacity: 0, y: 18 }}
+                  whileInView={{ opacity: 1, y: 0 }}
+                  viewport={{ once: true }}
+                  transition={{ duration: 0.8, delay: i * 0.14 }}
+                  className="surface space-y-5 p-7"
+                >
+                  <div className="flex gap-0.5">
+                    {Array.from({ length: 5 }).map((_, s) => (
+                      <Star key={s} className="h-4 w-4 fill-amber text-amber" />
+                    ))}
+                  </div>
+                  <blockquote className="text-sm">{t.text}</blockquote>
+                  <figcaption className="text-sm">
+                    <span className="font-medium">{t.name}</span>
+                    <span className="block text-xs text-muted-foreground">{t.role}</span>
+                  </figcaption>
+                </motion.figure>
+              ))}
+            </div>
+          </div>
+        </motion.section>
+
+        {/* FAQ */}
+        <motion.section
+          id="faq"
+          {...sectionReveal}
+          className="mx-auto w-full px-5 py-20 sm:px-8 lg:px-12 xl:px-16"
+        >
+          <h2 className="text-3xl font-semibold tracking-tight sm:text-4xl">
+            Frequently asked questions
+          </h2>
+          <Accordion type="single" collapsible className="mt-10 w-full">
+            <div className="grid gap-x-10 md:grid-cols-2">
+              {faqs.map((f, i) => (
+                <motion.div
+                  key={f.q}
+                  initial={{ opacity: 0, y: 16 }}
+                  whileInView={{ opacity: 1, y: 0 }}
+                  viewport={{ once: true, amount: 0.2 }}
+                  transition={{ duration: 0.7, delay: i * 0.12 }}
+                >
+                  <AccordionItem value={f.q}>
+                    <AccordionTrigger className="text-left">{f.q}</AccordionTrigger>
+                    <AccordionContent className="text-muted-foreground">{f.a}</AccordionContent>
+                  </AccordionItem>
+                </motion.div>
+              ))}
+            </div>
+          </Accordion>
+        </motion.section>
+
+        {/* CTA */}
+        <motion.section {...sectionReveal} className="border-t border-border bg-primary-soft">
+          <div className="mx-auto flex w-full flex-col items-center gap-5 px-5 py-20 text-center sm:px-8 lg:px-12 xl:px-16">
+            <h2 className="max-w-2xl text-3xl font-semibold tracking-tight sm:text-4xl">
+              Where will India take you next?
+            </h2>
+            <p className="max-w-xl text-muted-foreground">
+              Start with a city and a number of days. The AI does the rest.
+            </p>
+            <Button asChild size="lg">
+              <Link to="/app/planner">
+                Plan my trip <ArrowRight className="h-4 w-4" />
+              </Link>
+            </Button>
+          </div>
+        </motion.section>
+      </main>
+
+      <footer className="border-t border-border bg-card/60">
+        <div className="mx-auto flex w-full flex-col gap-5 px-5 py-12 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between sm:px-8 lg:px-12 xl:px-16">
+          <Logo />
+          <p>© 2026 GoWander. Planning, not booking.</p>
+        </div>
+      </footer>
+    </div>
+  );
+}

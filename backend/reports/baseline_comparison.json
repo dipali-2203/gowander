@@ -1,0 +1,931 @@
+{
+  "dataset": "synthetic_jaipur_catalog_v1",
+  "routing": "haversine_estimate",
+  "seeds": [
+    7,
+    19,
+    42,
+    73,
+    101
+  ],
+  "records": [
+    {
+      "seed": 7,
+      "greedy": {
+        "stops": [
+          {
+            "attraction_id": "jaipur-albert-hall",
+            "name": "Albert Hall Museum",
+            "arrival_minute": 540,
+            "departure_minute": 630,
+            "travel_minutes_before": 8,
+            "cost": 40.0,
+            "preference_score": 0.78,
+            "risk_score": 0.20023500000000005,
+            "wait_minutes": 532
+          },
+          {
+            "attraction_id": "jaipur-jantar",
+            "name": "Jantar Mantar",
+            "arrival_minute": 634,
+            "departure_minute": 709,
+            "travel_minutes_before": 4,
+            "cost": 200.0,
+            "preference_score": 0.82,
+            "risk_score": 0.3238,
+            "wait_minutes": 0
+          }
+        ],
+        "total_cost": 240.0,
+        "total_travel_minutes": 12,
+        "total_visit_minutes": 165,
+        "satisfaction": 0.8,
+        "risk_score": 0.459,
+        "feasible": true,
+        "warnings": [
+          "5 attractions were omitted because of budget or time constraints."
+        ],
+        "runtime_ms": 0.141
+      },
+      "nsga2": {
+        "runtime_ms": 889.115,
+        "alternative_count": 3,
+        "alternatives": [
+          {
+            "itinerary": {
+              "stops": [
+                {
+                  "attraction_id": "jaipur-jal-mahal",
+                  "name": "Jal Mahal viewpoint",
+                  "arrival_minute": 480,
+                  "departure_minute": 525,
+                  "travel_minutes_before": 18,
+                  "cost": 0.0,
+                  "preference_score": 0.7,
+                  "risk_score": 0.30501999999999996,
+                  "wait_minutes": 462
+                }
+              ],
+              "total_cost": 0.0,
+              "total_travel_minutes": 18,
+              "total_visit_minutes": 45,
+              "satisfaction": 0.7,
+              "risk_score": 0.305,
+              "feasible": true,
+              "warnings": []
+            },
+            "objectives": {
+              "cost": 0.0,
+              "time_proxy_minutes": 63.0,
+              "risk_proxy": 0.305,
+              "utility": 0.49
+            }
+          },
+          {
+            "itinerary": {
+              "stops": [
+                {
+                  "attraction_id": "jaipur-albert-hall",
+                  "name": "Albert Hall Museum",
+                  "arrival_minute": 540,
+                  "departure_minute": 630,
+                  "travel_minutes_before": 8,
+                  "cost": 40.0,
+                  "preference_score": 0.78,
+                  "risk_score": 0.20023500000000005,
+                  "wait_minutes": 532
+                }
+              ],
+              "total_cost": 40.0,
+              "total_travel_minutes": 8,
+              "total_visit_minutes": 90,
+              "satisfaction": 0.78,
+              "risk_score": 0.2,
+              "feasible": true,
+              "warnings": []
+            },
+            "objectives": {
+              "cost": 40.0,
+              "time_proxy_minutes": 98.0,
+              "risk_proxy": 0.2002,
+              "utility": 0.78
+            }
+          },
+          {
+            "itinerary": {
+              "stops": [
+                {
+                  "attraction_id": "jaipur-albert-hall",
+                  "name": "Albert Hall Museum",
+                  "arrival_minute": 540,
+                  "departure_minute": 630,
+                  "travel_minutes_before": 8,
+                  "cost": 40.0,
+                  "preference_score": 0.78,
+                  "risk_score": 0.20023500000000005,
+                  "wait_minutes": 532
+                },
+                {
+                  "attraction_id": "jaipur-jal-mahal",
+                  "name": "Jal Mahal viewpoint",
+                  "arrival_minute": 643,
+                  "departure_minute": 688,
+                  "travel_minutes_before": 13,
+                  "cost": 0.0,
+                  "preference_score": 0.7,
+                  "risk_score": 0.30501999999999996,
+                  "wait_minutes": 0
+                }
+              ],
+              "total_cost": 40.0,
+              "total_travel_minutes": 21,
+              "total_visit_minutes": 135,
+              "satisfaction": 0.74,
+              "risk_score": 0.444,
+              "feasible": true,
+              "warnings": []
+            },
+            "objectives": {
+              "cost": 40.0,
+              "time_proxy_minutes": 161.0,
+              "risk_proxy": 0.5053,
+              "utility": 1.27
+            }
+          }
+        ]
+      },
+      "simulated_annealing": {
+        "stops": [
+          {
+            "attraction_id": "jaipur-albert-hall",
+            "name": "Albert Hall Museum",
+            "arrival_minute": 540,
+            "departure_minute": 630,
+            "travel_minutes_before": 8,
+            "cost": 40.0,
+            "preference_score": 0.78,
+            "risk_score": 0.20023500000000005,
+            "wait_minutes": 532
+          },
+          {
+            "attraction_id": "jaipur-jantar",
+            "name": "Jantar Mantar",
+            "arrival_minute": 634,
+            "departure_minute": 709,
+            "travel_minutes_before": 4,
+            "cost": 200.0,
+            "preference_score": 0.82,
+            "risk_score": 0.3238,
+            "wait_minutes": 0
+          }
+        ],
+        "total_cost": 240.0,
+        "total_travel_minutes": 12,
+        "total_visit_minutes": 165,
+        "satisfaction": 0.8,
+        "risk_score": 0.459,
+        "feasible": true,
+        "warnings": [
+          "5 attractions were omitted because of budget or time constraints."
+        ],
+        "runtime_ms": 2.995
+      }
+    },
+    {
+      "seed": 19,
+      "greedy": {
+        "stops": [
+          {
+            "attraction_id": "jaipur-albert-hall",
+            "name": "Albert Hall Museum",
+            "arrival_minute": 540,
+            "departure_minute": 630,
+            "travel_minutes_before": 8,
+            "cost": 40.0,
+            "preference_score": 0.78,
+            "risk_score": 0.20023500000000005,
+            "wait_minutes": 532
+          },
+          {
+            "attraction_id": "jaipur-jantar",
+            "name": "Jantar Mantar",
+            "arrival_minute": 634,
+            "departure_minute": 709,
+            "travel_minutes_before": 4,
+            "cost": 200.0,
+            "preference_score": 0.82,
+            "risk_score": 0.3238,
+            "wait_minutes": 0
+          }
+        ],
+        "total_cost": 240.0,
+        "total_travel_minutes": 12,
+        "total_visit_minutes": 165,
+        "satisfaction": 0.8,
+        "risk_score": 0.459,
+        "feasible": true,
+        "warnings": [
+          "5 attractions were omitted because of budget or time constraints."
+        ],
+        "runtime_ms": 0.097
+      },
+      "nsga2": {
+        "runtime_ms": 881.329,
+        "alternative_count": 3,
+        "alternatives": [
+          {
+            "itinerary": {
+              "stops": [
+                {
+                  "attraction_id": "jaipur-jal-mahal",
+                  "name": "Jal Mahal viewpoint",
+                  "arrival_minute": 480,
+                  "departure_minute": 525,
+                  "travel_minutes_before": 18,
+                  "cost": 0.0,
+                  "preference_score": 0.7,
+                  "risk_score": 0.30501999999999996,
+                  "wait_minutes": 462
+                }
+              ],
+              "total_cost": 0.0,
+              "total_travel_minutes": 18,
+              "total_visit_minutes": 45,
+              "satisfaction": 0.7,
+              "risk_score": 0.305,
+              "feasible": true,
+              "warnings": []
+            },
+            "objectives": {
+              "cost": 0.0,
+              "time_proxy_minutes": 63.0,
+              "risk_proxy": 0.305,
+              "utility": 0.49
+            }
+          },
+          {
+            "itinerary": {
+              "stops": [
+                {
+                  "attraction_id": "jaipur-albert-hall",
+                  "name": "Albert Hall Museum",
+                  "arrival_minute": 540,
+                  "departure_minute": 630,
+                  "travel_minutes_before": 8,
+                  "cost": 40.0,
+                  "preference_score": 0.78,
+                  "risk_score": 0.20023500000000005,
+                  "wait_minutes": 532
+                }
+              ],
+              "total_cost": 40.0,
+              "total_travel_minutes": 8,
+              "total_visit_minutes": 90,
+              "satisfaction": 0.78,
+              "risk_score": 0.2,
+              "feasible": true,
+              "warnings": []
+            },
+            "objectives": {
+              "cost": 40.0,
+              "time_proxy_minutes": 98.0,
+              "risk_proxy": 0.2002,
+              "utility": 0.78
+            }
+          },
+          {
+            "itinerary": {
+              "stops": [
+                {
+                  "attraction_id": "jaipur-albert-hall",
+                  "name": "Albert Hall Museum",
+                  "arrival_minute": 540,
+                  "departure_minute": 630,
+                  "travel_minutes_before": 8,
+                  "cost": 40.0,
+                  "preference_score": 0.78,
+                  "risk_score": 0.20023500000000005,
+                  "wait_minutes": 532
+                },
+                {
+                  "attraction_id": "jaipur-jal-mahal",
+                  "name": "Jal Mahal viewpoint",
+                  "arrival_minute": 643,
+                  "departure_minute": 688,
+                  "travel_minutes_before": 13,
+                  "cost": 0.0,
+                  "preference_score": 0.7,
+                  "risk_score": 0.30501999999999996,
+                  "wait_minutes": 0
+                }
+              ],
+              "total_cost": 40.0,
+              "total_travel_minutes": 21,
+              "total_visit_minutes": 135,
+              "satisfaction": 0.74,
+              "risk_score": 0.444,
+              "feasible": true,
+              "warnings": []
+            },
+            "objectives": {
+              "cost": 40.0,
+              "time_proxy_minutes": 161.0,
+              "risk_proxy": 0.5053,
+              "utility": 1.27
+            }
+          }
+        ]
+      },
+      "simulated_annealing": {
+        "stops": [
+          {
+            "attraction_id": "jaipur-albert-hall",
+            "name": "Albert Hall Museum",
+            "arrival_minute": 540,
+            "departure_minute": 630,
+            "travel_minutes_before": 8,
+            "cost": 40.0,
+            "preference_score": 0.78,
+            "risk_score": 0.20023500000000005,
+            "wait_minutes": 532
+          },
+          {
+            "attraction_id": "jaipur-jantar",
+            "name": "Jantar Mantar",
+            "arrival_minute": 634,
+            "departure_minute": 709,
+            "travel_minutes_before": 4,
+            "cost": 200.0,
+            "preference_score": 0.82,
+            "risk_score": 0.3238,
+            "wait_minutes": 0
+          }
+        ],
+        "total_cost": 240.0,
+        "total_travel_minutes": 12,
+        "total_visit_minutes": 165,
+        "satisfaction": 0.8,
+        "risk_score": 0.459,
+        "feasible": true,
+        "warnings": [
+          "5 attractions were omitted because of budget or time constraints."
+        ],
+        "runtime_ms": 2.877
+      }
+    },
+    {
+      "seed": 42,
+      "greedy": {
+        "stops": [
+          {
+            "attraction_id": "jaipur-albert-hall",
+            "name": "Albert Hall Museum",
+            "arrival_minute": 540,
+            "departure_minute": 630,
+            "travel_minutes_before": 8,
+            "cost": 40.0,
+            "preference_score": 0.78,
+            "risk_score": 0.20023500000000005,
+            "wait_minutes": 532
+          },
+          {
+            "attraction_id": "jaipur-jantar",
+            "name": "Jantar Mantar",
+            "arrival_minute": 634,
+            "departure_minute": 709,
+            "travel_minutes_before": 4,
+            "cost": 200.0,
+            "preference_score": 0.82,
+            "risk_score": 0.3238,
+            "wait_minutes": 0
+          }
+        ],
+        "total_cost": 240.0,
+        "total_travel_minutes": 12,
+        "total_visit_minutes": 165,
+        "satisfaction": 0.8,
+        "risk_score": 0.459,
+        "feasible": true,
+        "warnings": [
+          "5 attractions were omitted because of budget or time constraints."
+        ],
+        "runtime_ms": 0.064
+      },
+      "nsga2": {
+        "runtime_ms": 858.51,
+        "alternative_count": 3,
+        "alternatives": [
+          {
+            "itinerary": {
+              "stops": [
+                {
+                  "attraction_id": "jaipur-jal-mahal",
+                  "name": "Jal Mahal viewpoint",
+                  "arrival_minute": 480,
+                  "departure_minute": 525,
+                  "travel_minutes_before": 18,
+                  "cost": 0.0,
+                  "preference_score": 0.7,
+                  "risk_score": 0.30501999999999996,
+                  "wait_minutes": 462
+                }
+              ],
+              "total_cost": 0.0,
+              "total_travel_minutes": 18,
+              "total_visit_minutes": 45,
+              "satisfaction": 0.7,
+              "risk_score": 0.305,
+              "feasible": true,
+              "warnings": []
+            },
+            "objectives": {
+              "cost": 0.0,
+              "time_proxy_minutes": 63.0,
+              "risk_proxy": 0.305,
+              "utility": 0.49
+            }
+          },
+          {
+            "itinerary": {
+              "stops": [
+                {
+                  "attraction_id": "jaipur-albert-hall",
+                  "name": "Albert Hall Museum",
+                  "arrival_minute": 540,
+                  "departure_minute": 630,
+                  "travel_minutes_before": 8,
+                  "cost": 40.0,
+                  "preference_score": 0.78,
+                  "risk_score": 0.20023500000000005,
+                  "wait_minutes": 532
+                }
+              ],
+              "total_cost": 40.0,
+              "total_travel_minutes": 8,
+              "total_visit_minutes": 90,
+              "satisfaction": 0.78,
+              "risk_score": 0.2,
+              "feasible": true,
+              "warnings": []
+            },
+            "objectives": {
+              "cost": 40.0,
+              "time_proxy_minutes": 98.0,
+              "risk_proxy": 0.2002,
+              "utility": 0.78
+            }
+          },
+          {
+            "itinerary": {
+              "stops": [
+                {
+                  "attraction_id": "jaipur-albert-hall",
+                  "name": "Albert Hall Museum",
+                  "arrival_minute": 540,
+                  "departure_minute": 630,
+                  "travel_minutes_before": 8,
+                  "cost": 40.0,
+                  "preference_score": 0.78,
+                  "risk_score": 0.20023500000000005,
+                  "wait_minutes": 532
+                },
+                {
+                  "attraction_id": "jaipur-jal-mahal",
+                  "name": "Jal Mahal viewpoint",
+                  "arrival_minute": 643,
+                  "departure_minute": 688,
+                  "travel_minutes_before": 13,
+                  "cost": 0.0,
+                  "preference_score": 0.7,
+                  "risk_score": 0.30501999999999996,
+                  "wait_minutes": 0
+                }
+              ],
+              "total_cost": 40.0,
+              "total_travel_minutes": 21,
+              "total_visit_minutes": 135,
+              "satisfaction": 0.74,
+              "risk_score": 0.444,
+              "feasible": true,
+              "warnings": []
+            },
+            "objectives": {
+              "cost": 40.0,
+              "time_proxy_minutes": 161.0,
+              "risk_proxy": 0.5053,
+              "utility": 1.27
+            }
+          }
+        ]
+      },
+      "simulated_annealing": {
+        "stops": [
+          {
+            "attraction_id": "jaipur-albert-hall",
+            "name": "Albert Hall Museum",
+            "arrival_minute": 540,
+            "departure_minute": 630,
+            "travel_minutes_before": 8,
+            "cost": 40.0,
+            "preference_score": 0.78,
+            "risk_score": 0.20023500000000005,
+            "wait_minutes": 532
+          },
+          {
+            "attraction_id": "jaipur-jantar",
+            "name": "Jantar Mantar",
+            "arrival_minute": 634,
+            "departure_minute": 709,
+            "travel_minutes_before": 4,
+            "cost": 200.0,
+            "preference_score": 0.82,
+            "risk_score": 0.3238,
+            "wait_minutes": 0
+          }
+        ],
+        "total_cost": 240.0,
+        "total_travel_minutes": 12,
+        "total_visit_minutes": 165,
+        "satisfaction": 0.8,
+        "risk_score": 0.459,
+        "feasible": true,
+        "warnings": [
+          "5 attractions were omitted because of budget or time constraints."
+        ],
+        "runtime_ms": 2.911
+      }
+    },
+    {
+      "seed": 73,
+      "greedy": {
+        "stops": [
+          {
+            "attraction_id": "jaipur-albert-hall",
+            "name": "Albert Hall Museum",
+            "arrival_minute": 540,
+            "departure_minute": 630,
+            "travel_minutes_before": 8,
+            "cost": 40.0,
+            "preference_score": 0.78,
+            "risk_score": 0.20023500000000005,
+            "wait_minutes": 532
+          },
+          {
+            "attraction_id": "jaipur-jantar",
+            "name": "Jantar Mantar",
+            "arrival_minute": 634,
+            "departure_minute": 709,
+            "travel_minutes_before": 4,
+            "cost": 200.0,
+            "preference_score": 0.82,
+            "risk_score": 0.3238,
+            "wait_minutes": 0
+          }
+        ],
+        "total_cost": 240.0,
+        "total_travel_minutes": 12,
+        "total_visit_minutes": 165,
+        "satisfaction": 0.8,
+        "risk_score": 0.459,
+        "feasible": true,
+        "warnings": [
+          "5 attractions were omitted because of budget or time constraints."
+        ],
+        "runtime_ms": 0.067
+      },
+      "nsga2": {
+        "runtime_ms": 882.456,
+        "alternative_count": 3,
+        "alternatives": [
+          {
+            "itinerary": {
+              "stops": [
+                {
+                  "attraction_id": "jaipur-jal-mahal",
+                  "name": "Jal Mahal viewpoint",
+                  "arrival_minute": 480,
+                  "departure_minute": 525,
+                  "travel_minutes_before": 18,
+                  "cost": 0.0,
+                  "preference_score": 0.7,
+                  "risk_score": 0.30501999999999996,
+                  "wait_minutes": 462
+                }
+              ],
+              "total_cost": 0.0,
+              "total_travel_minutes": 18,
+              "total_visit_minutes": 45,
+              "satisfaction": 0.7,
+              "risk_score": 0.305,
+              "feasible": true,
+              "warnings": []
+            },
+            "objectives": {
+              "cost": 0.0,
+              "time_proxy_minutes": 63.0,
+              "risk_proxy": 0.305,
+              "utility": 0.49
+            }
+          },
+          {
+            "itinerary": {
+              "stops": [
+                {
+                  "attraction_id": "jaipur-albert-hall",
+                  "name": "Albert Hall Museum",
+                  "arrival_minute": 540,
+                  "departure_minute": 630,
+                  "travel_minutes_before": 8,
+                  "cost": 40.0,
+                  "preference_score": 0.78,
+                  "risk_score": 0.20023500000000005,
+                  "wait_minutes": 532
+                }
+              ],
+              "total_cost": 40.0,
+              "total_travel_minutes": 8,
+              "total_visit_minutes": 90,
+              "satisfaction": 0.78,
+              "risk_score": 0.2,
+              "feasible": true,
+              "warnings": []
+            },
+            "objectives": {
+              "cost": 40.0,
+              "time_proxy_minutes": 98.0,
+              "risk_proxy": 0.2002,
+              "utility": 0.78
+            }
+          },
+          {
+            "itinerary": {
+              "stops": [
+                {
+                  "attraction_id": "jaipur-albert-hall",
+                  "name": "Albert Hall Museum",
+                  "arrival_minute": 540,
+                  "departure_minute": 630,
+                  "travel_minutes_before": 8,
+                  "cost": 40.0,
+                  "preference_score": 0.78,
+                  "risk_score": 0.20023500000000005,
+                  "wait_minutes": 532
+                },
+                {
+                  "attraction_id": "jaipur-jal-mahal",
+                  "name": "Jal Mahal viewpoint",
+                  "arrival_minute": 643,
+                  "departure_minute": 688,
+                  "travel_minutes_before": 13,
+                  "cost": 0.0,
+                  "preference_score": 0.7,
+                  "risk_score": 0.30501999999999996,
+                  "wait_minutes": 0
+                }
+              ],
+              "total_cost": 40.0,
+              "total_travel_minutes": 21,
+              "total_visit_minutes": 135,
+              "satisfaction": 0.74,
+              "risk_score": 0.444,
+              "feasible": true,
+              "warnings": []
+            },
+            "objectives": {
+              "cost": 40.0,
+              "time_proxy_minutes": 161.0,
+              "risk_proxy": 0.5053,
+              "utility": 1.27
+            }
+          }
+        ]
+      },
+      "simulated_annealing": {
+        "stops": [
+          {
+            "attraction_id": "jaipur-albert-hall",
+            "name": "Albert Hall Museum",
+            "arrival_minute": 540,
+            "departure_minute": 630,
+            "travel_minutes_before": 8,
+            "cost": 40.0,
+            "preference_score": 0.78,
+            "risk_score": 0.20023500000000005,
+            "wait_minutes": 532
+          },
+          {
+            "attraction_id": "jaipur-jantar",
+            "name": "Jantar Mantar",
+            "arrival_minute": 634,
+            "departure_minute": 709,
+            "travel_minutes_before": 4,
+            "cost": 200.0,
+            "preference_score": 0.82,
+            "risk_score": 0.3238,
+            "wait_minutes": 0
+          }
+        ],
+        "total_cost": 240.0,
+        "total_travel_minutes": 12,
+        "total_visit_minutes": 165,
+        "satisfaction": 0.8,
+        "risk_score": 0.459,
+        "feasible": true,
+        "warnings": [
+          "5 attractions were omitted because of budget or time constraints."
+        ],
+        "runtime_ms": 3.749
+      }
+    },
+    {
+      "seed": 101,
+      "greedy": {
+        "stops": [
+          {
+            "attraction_id": "jaipur-albert-hall",
+            "name": "Albert Hall Museum",
+            "arrival_minute": 540,
+            "departure_minute": 630,
+            "travel_minutes_before": 8,
+            "cost": 40.0,
+            "preference_score": 0.78,
+            "risk_score": 0.20023500000000005,
+            "wait_minutes": 532
+          },
+          {
+            "attraction_id": "jaipur-jantar",
+            "name": "Jantar Mantar",
+            "arrival_minute": 634,
+            "departure_minute": 709,
+            "travel_minutes_before": 4,
+            "cost": 200.0,
+            "preference_score": 0.82,
+            "risk_score": 0.3238,
+            "wait_minutes": 0
+          }
+        ],
+        "total_cost": 240.0,
+        "total_travel_minutes": 12,
+        "total_visit_minutes": 165,
+        "satisfaction": 0.8,
+        "risk_score": 0.459,
+        "feasible": true,
+        "warnings": [
+          "5 attractions were omitted because of budget or time constraints."
+        ],
+        "runtime_ms": 0.094
+      },
+      "nsga2": {
+        "runtime_ms": 923.286,
+        "alternative_count": 3,
+        "alternatives": [
+          {
+            "itinerary": {
+              "stops": [
+                {
+                  "attraction_id": "jaipur-jal-mahal",
+                  "name": "Jal Mahal viewpoint",
+                  "arrival_minute": 480,
+                  "departure_minute": 525,
+                  "travel_minutes_before": 18,
+                  "cost": 0.0,
+                  "preference_score": 0.7,
+                  "risk_score": 0.30501999999999996,
+                  "wait_minutes": 462
+                }
+              ],
+              "total_cost": 0.0,
+              "total_travel_minutes": 18,
+              "total_visit_minutes": 45,
+              "satisfaction": 0.7,
+              "risk_score": 0.305,
+              "feasible": true,
+              "warnings": []
+            },
+            "objectives": {
+              "cost": 0.0,
+              "time_proxy_minutes": 63.0,
+              "risk_proxy": 0.305,
+              "utility": 0.49
+            }
+          },
+          {
+            "itinerary": {
+              "stops": [
+                {
+                  "attraction_id": "jaipur-albert-hall",
+                  "name": "Albert Hall Museum",
+                  "arrival_minute": 540,
+                  "departure_minute": 630,
+                  "travel_minutes_before": 8,
+                  "cost": 40.0,
+                  "preference_score": 0.78,
+                  "risk_score": 0.20023500000000005,
+                  "wait_minutes": 532
+                }
+              ],
+              "total_cost": 40.0,
+              "total_travel_minutes": 8,
+              "total_visit_minutes": 90,
+              "satisfaction": 0.78,
+              "risk_score": 0.2,
+              "feasible": true,
+              "warnings": []
+            },
+            "objectives": {
+              "cost": 40.0,
+              "time_proxy_minutes": 98.0,
+              "risk_proxy": 0.2002,
+              "utility": 0.78
+            }
+          },
+          {
+            "itinerary": {
+              "stops": [
+                {
+                  "attraction_id": "jaipur-albert-hall",
+                  "name": "Albert Hall Museum",
+                  "arrival_minute": 540,
+                  "departure_minute": 630,
+                  "travel_minutes_before": 8,
+                  "cost": 40.0,
+                  "preference_score": 0.78,
+                  "risk_score": 0.20023500000000005,
+                  "wait_minutes": 532
+                },
+                {
+                  "attraction_id": "jaipur-jal-mahal",
+                  "name": "Jal Mahal viewpoint",
+                  "arrival_minute": 643,
+                  "departure_minute": 688,
+                  "travel_minutes_before": 13,
+                  "cost": 0.0,
+                  "preference_score": 0.7,
+                  "risk_score": 0.30501999999999996,
+                  "wait_minutes": 0
+                }
+              ],
+              "total_cost": 40.0,
+              "total_travel_minutes": 21,
+              "total_visit_minutes": 135,
+              "satisfaction": 0.74,
+              "risk_score": 0.444,
+              "feasible": true,
+              "warnings": []
+            },
+            "objectives": {
+              "cost": 40.0,
+              "time_proxy_minutes": 161.0,
+              "risk_proxy": 0.5053,
+              "utility": 1.27
+            }
+          }
+        ]
+      },
+      "simulated_annealing": {
+        "stops": [
+          {
+            "attraction_id": "jaipur-albert-hall",
+            "name": "Albert Hall Museum",
+            "arrival_minute": 540,
+            "departure_minute": 630,
+            "travel_minutes_before": 8,
+            "cost": 40.0,
+            "preference_score": 0.78,
+            "risk_score": 0.20023500000000005,
+            "wait_minutes": 532
+          },
+          {
+            "attraction_id": "jaipur-jantar",
+            "name": "Jantar Mantar",
+            "arrival_minute": 634,
+            "departure_minute": 709,
+            "travel_minutes_before": 4,
+            "cost": 200.0,
+            "preference_score": 0.82,
+            "risk_score": 0.3238,
+            "wait_minutes": 0
+          }
+        ],
+        "total_cost": 240.0,
+        "total_travel_minutes": 12,
+        "total_visit_minutes": 165,
+        "satisfaction": 0.8,
+        "risk_score": 0.459,
+        "feasible": true,
+        "warnings": [
+          "5 attractions were omitted because of budget or time constraints."
+        ],
+        "runtime_ms": 4.135
+      }
+    }
+  ],
+  "summary": {
+    "greedy_runtime_ms_mean": 0.093,
+    "greedy_satisfaction_mean": 0.8,
+    "nsga2_runtime_ms_mean": 886.939,
+    "nsga2_alternatives_mean": 3,
+    "annealing_runtime_ms_mean": 3.333,
+    "annealing_satisfaction_mean": 0.8
+  }
+}

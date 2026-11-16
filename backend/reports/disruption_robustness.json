@@ -1,0 +1,44 @@
+{
+  "dataset": "synthetic_jaipur_catalog_v1",
+  "routing": "haversine_estimate",
+  "records": [
+    {
+      "scenario": "rainfall (severity 0.60)",
+      "excluded_attractions": [],
+      "runtime_ms": 0.179,
+      "feasible": true,
+      "stops": 2,
+      "cost": 240.0,
+      "risk_score": 0.928
+    },
+    {
+      "scenario": "traffic (severity 0.60)",
+      "excluded_attractions": [],
+      "runtime_ms": 0.151,
+      "feasible": true,
+      "stops": 2,
+      "cost": 240.0,
+      "risk_score": 0.459
+    },
+    {
+      "scenario": "crowding (severity 0.60)",
+      "excluded_attractions": [],
+      "runtime_ms": 0.139,
+      "feasible": true,
+      "stops": 2,
+      "cost": 40.0,
+      "risk_score": 0.962
+    },
+    {
+      "scenario": "closure (severity 1.00)",
+      "excluded_attractions": [
+        "jaipur-amber"
+      ],
+      "runtime_ms": 0.109,
+      "feasible": true,
+      "stops": 2,
+      "cost": 240.0,
+      "risk_score": 0.459
+    }
+  ]
+}
