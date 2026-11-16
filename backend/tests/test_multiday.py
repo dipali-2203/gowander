@@ -1,5 +1,7 @@
 from datetime import date
 
+import pytest
+
 from app.schemas import AttractionInput, ConfirmedActivity, MealBreak, Preferences
 from app.services.multiday import generate_multiday_greedy
 
@@ -56,3 +58,72 @@ def test_unreachable_fixed_reservation_is_marked_infeasible():
     )
     assert result["days"][0]["feasible"] is False
     assert "cannot be reached" in result["days"][0]["warnings"][0]
+
+
+@pytest.mark.parametrize("days", [1, 3, 5, 7])
+def test_multi_day_baseline_distributes_feasible_attractions(days):
+    attractions = [
+        AttractionInput(
+            id=f"place-{index}", name=f"Place {index}", category="history",
+            latitude=17.385, longitude=78.4867, cost=100, visit_minutes=60,
+            preference_score=0.8, opening_minute=0, closing_minute=1200,
+        )
+        for index in range(days * 2)
+    ]
+    result = generate_multiday_greedy(
+        attractions=attractions, preferences=Preferences(),
+        start_date=date(2026, 11, 1), end_date=date(2026, 11, days),
+        start_latitude=17.385, start_longitude=78.4867,
+        budget=days * 200, available_minutes_per_day=720,
+        meal_breaks=[], confirmed_activities=[], routing_provider="haversine",
+    )
+
+    assert len(result["days"]) == days
+    assert all(day["stops"] for day in result["days"])
+    assert len({stop.attraction_id for day in result["days"] for stop in day["stops"]}) == days * 2
+    assert result["total_cost"] == days * 200
+    assert result["feasible"] is True
+
+
+def test_meal_break_is_returned_and_reserved_between_activities():
+    attractions = [
+        AttractionInput(
+            id=f"place-{index}", name=f"Place {index}", category="history",
+            latitude=17.385, longitude=78.4867, cost=0, visit_minutes=60,
+            preference_score=0.8, opening_minute=0, closing_minute=720,
+        )
+        for index in range(2)
+    ]
+    result = generate_multiday_greedy(
+        attractions=attractions, preferences=Preferences(),
+        start_date=date(2026, 11, 1), end_date=date(2026, 11, 1),
+        start_latitude=17.385, start_longitude=78.4867, budget=100,
+        available_minutes_per_day=240,
+        meal_breaks=[MealBreak(start_minute=60, duration_minutes=30)],
+        confirmed_activities=[], routing_provider="haversine",
+    )
+
+    day = result["days"][0]
+    assert day["meal_breaks"] == [MealBreak(start_minute=60, duration_minutes=30)]
+    assert day["stops"][1].arrival_minute >= 90
+
+
+def test_catalog_larger_than_trip_capacity_is_reported():
+    attractions = [
+        AttractionInput(
+            id=f"place-{index}", name=f"Place {index}", category="history",
+            latitude=17.385, longitude=78.4867, cost=100, visit_minutes=240,
+            preference_score=0.8, opening_minute=0, closing_minute=720,
+        )
+        for index in range(3)
+    ]
+    result = generate_multiday_greedy(
+        attractions=attractions, preferences=Preferences(),
+        start_date=date(2026, 11, 1), end_date=date(2026, 11, 1),
+        start_latitude=17.385, start_longitude=78.4867, budget=1000,
+        available_minutes_per_day=240,
+        meal_breaks=[], confirmed_activities=[], routing_provider="haversine",
+    )
+
+    assert result["feasible"] is False
+    assert "remain unscheduled" in result["warnings"][0]

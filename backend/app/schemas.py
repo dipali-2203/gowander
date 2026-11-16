@@ -57,21 +57,50 @@ class ProfileUpdate(BaseModel):
         return self
 
 
+class TripPlanningOptions(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    traveler_count: int = Field(default=1, ge=1, le=30)
+    transportation_mode: str = Field(default="mixed", min_length=1, max_length=40)
+    accommodation_category: Literal["budget", "standard", "premium", "luxury"] = "standard"
+    meal_preferences: list[str] = Field(default_factory=list, max_length=12)
+    miscellaneous_budget: float = Field(default=0, ge=0, le=5_000_000)
+
+
 class TripCreate(BaseModel):
+    name: str | None = Field(default=None, max_length=150)
+    origin: str = Field(default="", max_length=100)
     destination: str = Field(min_length=2, max_length=100)
     start_date: date
     end_date: date
     budget: float = Field(gt=0)
-    available_minutes_per_day: int = Field(default=480, gt=0)
+    available_minutes_per_day: int = Field(default=1200, gt=0)
     start_latitude: float = Field(ge=-90, le=90)
     start_longitude: float = Field(ge=-180, le=180)
     preferences: Preferences = Field(default_factory=Preferences)
+    planning_options: TripPlanningOptions = Field(default_factory=TripPlanningOptions)
 
     @model_validator(mode="after")
     def validate_dates(self):
         if self.end_date < self.start_date:
             raise ValueError("end_date must not precede start_date")
         return self
+
+
+class TripUpdate(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    name: str | None = Field(default=None, min_length=1, max_length=150)
+    origin: str | None = Field(default=None, max_length=100)
+    destination: str | None = Field(default=None, min_length=2, max_length=100)
+    start_date: date | None = None
+    end_date: date | None = None
+    budget: float | None = Field(default=None, gt=0)
+    available_minutes_per_day: int | None = Field(default=None, gt=0)
+    start_latitude: float | None = Field(default=None, ge=-90, le=90)
+    start_longitude: float | None = Field(default=None, ge=-180, le=180)
+    preferences: Preferences | None = None
+    planning_options: TripPlanningOptions | None = None
 
 
 class PreferenceFeedbackEvent(BaseModel):
@@ -222,6 +251,7 @@ class ItineraryDay(BaseModel):
     total_travel_minutes: int
     total_visit_minutes: int
     reserved_break_minutes: int
+    meal_breaks: list[MealBreak] = Field(default_factory=list)
     feasible: bool
     warnings: list[str]
 
@@ -238,6 +268,7 @@ class MultiDayItineraryResponse(BaseModel):
     feasible: bool
     warnings: list[str]
     data_source: Literal["synthetic", "user_supplied"]
+    budget_estimate: dict | None = None
 
 
 class ParetoAlternative(BaseModel):

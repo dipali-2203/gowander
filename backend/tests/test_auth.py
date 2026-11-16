@@ -96,13 +96,169 @@ def test_signup_creates_scrypt_user_and_http_only_session(client: TestClient):
     me = client.get("/api/v1/auth/me")
     assert me.status_code == 200
     assert me.json()["user"]["name"] == "Test Traveler"
-
     from app.database import get_db
     db = next(app.dependency_overrides[get_db]())
     stored = db.query(User).one()
     assert stored.password_hash.startswith("scrypt$")
     assert "a-long-password-123" not in stored.password_hash
     db.close()
+
+
+def test_authenticated_trip_reliability_endpoint_returns_simulation(client: TestClient):
+    assert signup(client, "risk@example.com").status_code == 201
+    trip = client.post(
+        "/api/v1/trips",
+        headers={"Origin": ORIGIN},
+        json={
+            "destination": "Jaipur",
+            "start_date": "2026-11-17",
+            "end_date": "2026-11-17",
+            "budget": 1000,
+            "available_minutes_per_day": 480,
+            "start_latitude": 26.9124,
+            "start_longitude": 75.7873,
+            "preferences": {},
+        },
+    )
+    assert trip.status_code == 201
+
+    response = client.post(
+        f"/api/v1/trips/{trip.json()['id']}/risk-simulation",
+        headers={"Origin": ORIGIN},
+        json={
+            "attractions": [{
+                "id": "planned-stop",
+                "name": "Planned stop",
+                "category": "history",
+                "latitude": 26.92,
+                "longitude": 75.82,
+                "cost": 100,
+                "visit_minutes": 60,
+                "preference_score": 0.8,
+                "weather_risk": 0.1,
+                "crowd_risk": 0.2,
+                "availability_risk": 0.05,
+            }],
+            "scenarios": 1000,
+            "seed": 42,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["scenarios"] == 1000
+    assert 0 <= response.json()["completion_probability"] <= 1
+    assert response.json()["expected_disruptions"] >= 0
+
+
+def test_trip_crud_persists_inputs_and_keeps_old_plan_when_edited(client: TestClient):
+    assert signup(client, "trip-owner@example.com").status_code == 201
+    created = client.post(
+        "/api/v1/trips",
+        headers={"Origin": ORIGIN},
+        json={
+            "name": "Weekend away",
+            "origin": "Delhi",
+            "destination": "Jaipur",
+            "start_date": "2026-12-01",
+            "end_date": "2026-12-01",
+            "budget": 50000,
+            "available_minutes_per_day": 1200,
+            "start_latitude": 26.9124,
+            "start_longitude": 75.7873,
+            "preferences": {},
+            "planning_options": {
+                "traveler_count": 2,
+                "transportation_mode": "train",
+                "accommodation_category": "standard",
+                "meal_preferences": ["vegetarian"],
+                "miscellaneous_budget": 1000,
+            },
+        },
+    )
+    trip_id = created.json()["id"]
+    plan = client.post(
+        f"/api/v1/trips/{trip_id}/optimize-multiday",
+        headers={"Origin": ORIGIN},
+        json={
+            "attractions": [{
+                "id": "museum", "name": "Museum", "category": "history",
+                "latitude": 26.92, "longitude": 75.82, "cost": 200,
+                "visit_minutes": 60, "preference_score": 0.9,
+                "opening_minute": 480, "closing_minute": 1080,
+            }],
+            "data_source": "synthetic",
+            "meal_breaks": [{"start_minute": 780, "duration_minutes": 60}],
+        },
+    )
+    assert plan.status_code == 200
+    previous_plan = plan.json()
+    assert previous_plan["budget_estimate"]["within_budget"] is True
+    assert {item["key"] for item in previous_plan["budget_estimate"]["categories"]} == {
+        "attractions", "transportation", "accommodation", "meals", "miscellaneous",
+    }
+    listed_trip = client.get("/api/v1/trips").json()[0]
+    assert listed_trip["latest_itinerary"] == previous_plan
+    attraction_payload = {
+        "id": "museum", "name": "Museum", "category": "history",
+        "latitude": 26.92, "longitude": 75.82, "cost": 200,
+        "visit_minutes": 60, "preference_score": 0.9,
+        "opening_minute": 480, "closing_minute": 1080,
+    }
+    assert client.post(
+        f"/api/v1/trips/{trip_id}/pareto",
+        headers={"Origin": ORIGIN},
+        json={"attractions": [attraction_payload], "seed": 42, "max_alternatives": 2},
+    ).status_code == 200
+    assert client.post(
+        f"/api/v1/trips/{trip_id}/anneal",
+        headers={"Origin": ORIGIN},
+        json={"attractions": [attraction_payload], "seed": 42},
+    ).status_code == 200
+
+    updated = client.put(
+        f"/api/v1/trips/{trip_id}",
+        headers={"Origin": ORIGIN},
+        json={"budget": 45000, "name": "Updated weekend"},
+    )
+    assert updated.status_code == 200
+    detail = client.get(f"/api/v1/trips/{trip_id}").json()
+    assert detail["budget"] == 45000
+    assert detail["name"] == "Updated weekend"
+    assert detail["latest_itinerary"] == previous_plan
+    assert detail["itinerary_stale"] is True
+    assert detail["planning_inputs"]["attractions"][0]["id"] == "museum"
+    assert detail["planning_options"]["traveler_count"] == 2
+    assert "pareto" in detail["optimization_results"]
+    assert "simulated_annealing" in detail["optimization_results"]
+
+    regenerated = client.post(f"/api/v1/trips/{trip_id}/regenerate", headers={"Origin": ORIGIN})
+    assert regenerated.status_code == 200
+    saved_replacement = regenerated.json()
+    assert saved_replacement["trip_id"] == trip_id
+    assert client.get(f"/api/v1/trips/{trip_id}").json()["itinerary_stale"] is False
+    assert client.get(f"/api/v1/trips/{trip_id}").json()["optimization_results"] == {}
+    assert client.put(f"/api/v1/trips/{trip_id}", headers={"Origin": ORIGIN}, json={"budget": 50}).status_code == 200
+    rejected_replacement = client.post(f"/api/v1/trips/{trip_id}/regenerate", headers={"Origin": ORIGIN})
+    assert rejected_replacement.status_code == 422
+    assert client.get(f"/api/v1/trips/{trip_id}").json()["latest_itinerary"] == saved_replacement
+
+    copied = client.post(f"/api/v1/trips/{trip_id}/duplicate", headers={"Origin": ORIGIN})
+    assert copied.status_code == 201
+    duplicate_id = copied.json()["id"]
+    assert client.get(f"/api/v1/trips/{duplicate_id}").status_code == 200
+
+    assert signup(client, "different-owner@example.com").status_code == 201
+    assert client.get(f"/api/v1/trips/{trip_id}").status_code == 404
+    assert client.put(f"/api/v1/trips/{trip_id}", headers={"Origin": ORIGIN}, json={"budget": 1}).status_code == 404
+    assert client.delete(f"/api/v1/trips/{trip_id}", headers={"Origin": ORIGIN}).status_code == 404
+    assert client.post(f"/api/v1/trips/{trip_id}/duplicate", headers={"Origin": ORIGIN}).status_code == 404
+    assert client.get("/api/v1/trips").json() == []
+
+    assert client.post("/api/v1/auth/login", headers={"Origin": ORIGIN}, json={
+        "email": "trip-owner@example.com", "password": "a-long-password-123",
+    }).status_code == 200
+    assert client.delete(f"/api/v1/trips/{duplicate_id}", headers={"Origin": ORIGIN}).json() == {"ok": True}
+    assert client.get(f"/api/v1/trips/{duplicate_id}").status_code == 404
 
 
 def test_login_rejects_bad_password_and_logout_revokes_session(client: TestClient):

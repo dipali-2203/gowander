@@ -80,6 +80,7 @@ def generate_greedy_itinerary(
     travel_matrix: TravelMatrix | None = None,
     priority_attraction_ids: set[str] | None = None,
     blocked_windows: list[tuple[int, int]] | None = None,
+    max_stops: int | None = None,
 ) -> dict:
     """Generate a feasible greedy itinerary for one planning day."""
 
@@ -133,7 +134,7 @@ def generate_greedy_itinerary(
     elapsed = 0
     spent = 0.0
 
-    while remaining:
+    while remaining and (max_stops is None or len(stops) < max_stops):
         candidates = []
 
         for attraction in remaining:

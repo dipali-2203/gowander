@@ -29,8 +29,14 @@ class AttractionSelectionProblem(ElementwiseProblem):
         cost = sum(a.cost for a in chosen)
         visit_time = sum(a.visit_minutes for a in chosen)
         # A conservative, reproducible route-time proxy before decoding the route.
-        travel = sum(self.matrix[0][index + 1] or self.minutes + 1 for index, selected in enumerate(x) if selected)
-        risk = sum(calculate_attraction_risk(a) for a in chosen)
+        travel = sum(
+            (self.matrix[0][index + 1] if self.matrix[0][index + 1] is not None else self.minutes + 1)
+            for index, selected in enumerate(x) if selected
+        )
+        survival = 1.0
+        for attraction in chosen:
+            survival *= 1.0 - calculate_attraction_risk(attraction)
+        risk = 1.0 - survival
         utility = sum(a.preference_score * self.preferences.interests.get(a.category.lower(), 0.5) for a in chosen)
         out["F"] = [cost, travel + visit_time, risk, -utility]
         out["G"] = [cost - self.budget, travel + visit_time - self.minutes]
@@ -61,9 +67,12 @@ def generate_nsga2_alternatives(
         signature = tuple(a.id for a in subset)
         if not subset or signature in seen:
             continue
+        matrix_indices = [0, *[index + 1 for index, active in enumerate(selected) if active]]
+        subset_matrix = [[travel_matrix[row][column] for column in matrix_indices] for row in matrix_indices]
         decoded = generate_greedy_itinerary(
             attractions=subset, preferences=preferences, start_latitude=start_latitude,
             start_longitude=start_longitude, budget=budget, available_minutes=available_minutes,
+            travel_matrix=subset_matrix,
         )
         if decoded["feasible"]:
             alternatives.append({"itinerary": decoded, "objectives": {

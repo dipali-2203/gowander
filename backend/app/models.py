@@ -14,6 +14,8 @@ class Trip(Base):
         Integer, primary_key=True, index=True
     )
     owner_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(150), default="", nullable=False)
+    origin: Mapped[str] = mapped_column(String(100), default="", nullable=False)
     destination: Mapped[str] = mapped_column(String(100))
     start_date: Mapped[date] = mapped_column(Date)
     end_date: Mapped[date] = mapped_column(Date)
@@ -22,6 +24,10 @@ class Trip(Base):
     start_latitude: Mapped[float] = mapped_column(Float)
     start_longitude: Mapped[float] = mapped_column(Float)
     preferences: Mapped[dict] = mapped_column(JSON)
+    planning_options: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    planning_inputs: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    optimization_results: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    itinerary_stale: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     latest_itinerary: Mapped[dict | None] = mapped_column(
         JSON, nullable=True
@@ -30,6 +36,11 @@ class Trip(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
     )
 
 

@@ -137,7 +137,10 @@ function Planner() {
   useEffect(() => {
     if (!generating) return;
     if (phase >= loadingSteps.length) {
-      const t = setTimeout(() => navigate({ to: "/app/itinerary" }), 500);
+      const t = setTimeout(
+        () => navigate({ to: "/app/itinerary", search: { tripId: undefined } }),
+        500,
+      );
       return () => clearTimeout(t);
     }
     const t = setTimeout(() => setPhase((p) => p + 1), 1100);
@@ -154,9 +157,21 @@ function Planner() {
     try {
       const destination = form.to.trim();
       const result = await createAndOptimizeTrip({
+        origin: form.from.trim(),
         destination,
         days: form.days,
         budget: form.budget[0] ?? 0,
+        travelerCount: form.travellers,
+        accommodationCategory:
+          form.hotelBudget === "low"
+            ? "budget"
+            : form.hotelBudget === "high"
+              ? "premium"
+              : form.hotelBudget === "lux"
+                ? "luxury"
+                : "standard",
+        miscellaneousBudget: 0,
+        mealPreferences: [],
         interests: form.picks,
         preferences: {
           riskTolerance: form.riskTolerance[0] ?? 0.3,
@@ -171,6 +186,8 @@ function Planner() {
         destination,
         result.alternatives,
         result.attractions,
+        result.startLocation,
+        result.budget,
         result.annealing,
       );
       setPhase(0);

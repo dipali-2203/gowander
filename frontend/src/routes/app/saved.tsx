@@ -1,9 +1,10 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { Bookmark, CalendarDays, MapPin, Plus } from "lucide-react";
+import { Bookmark, CalendarDays, Copy, MapPin, Pencil, Plus, Trash2 } from "lucide-react";
 import { PageHeader, EmptyState } from "@/components/travel/PageHeader";
 import { Button } from "@/components/ui/button";
-import { getUserTrips, type AccountTrip } from "@/lib/api";
+import { deleteTrip, duplicateTrip, getUserTrips, type AccountTrip } from "@/lib/api";
+import { toast } from "sonner";
 
 export const Route = createFileRoute("/app/saved")({
   head: () => ({
@@ -21,6 +22,36 @@ function Saved() {
   const [trips, setTrips] = useState<AccountTrip[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const reload = async () => {
+    try {
+      setTrips(await getUserTrips());
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not load your trips.");
+    }
+  };
+
+  const duplicate = async (trip: AccountTrip) => {
+    try {
+      await duplicateTrip(trip.id);
+      await reload();
+      toast.success("Trip duplicated.");
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "Could not duplicate this trip.");
+    }
+  };
+
+  const remove = async (trip: AccountTrip) => {
+    if (!window.confirm(`Delete “${trip.name}”? This cannot be undone.`)) return;
+    try {
+      await deleteTrip(trip.id);
+      await reload();
+      toast.success("Trip deleted.");
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "Could not delete this trip.");
+    }
+  };
 
   useEffect(() => {
     let active = true;
@@ -88,8 +119,10 @@ function Saved() {
                     <MapPin className="h-5 w-5" />
                   </span>
                   <div className="min-w-0">
-                    <h2 className="truncate font-semibold">{trip.destination}</h2>
-                    <p className="text-xs text-muted-foreground">Trip #{trip.id}</p>
+                    <h2 className="truncate font-semibold">{trip.name || trip.destination}</h2>
+                    <p className="text-xs text-muted-foreground">
+                      {trip.origin || "Origin not specified"} → {trip.destination}
+                    </p>
                   </div>
                 </div>
                 <span className="text-sm font-semibold">
@@ -100,11 +133,35 @@ function Saved() {
                 <CalendarDays className="h-4 w-4" />
                 {trip.start_date} – {trip.end_date}
               </p>
-              {trip.latest_itinerary && (
-                <p className="text-sm text-muted-foreground">
-                  An itinerary has been generated for this trip.
-                </p>
-              )}
+              <p className="text-sm text-muted-foreground">
+                {trip.latest_itinerary ? "Saved itinerary available" : "No itinerary generated yet"}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" asChild>
+                  <Link
+                    to="/app/trips/$tripId"
+                    params={{ tripId: String(trip.id) }}
+                    search={{ edit: false }}
+                  >
+                    Open trip
+                  </Link>
+                </Button>
+                <Button size="sm" variant="outline" asChild>
+                  <Link
+                    to="/app/trips/$tripId"
+                    params={{ tripId: String(trip.id) }}
+                    search={{ edit: true }}
+                  >
+                    <Pencil className="h-4 w-4" /> Edit
+                  </Link>
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => void duplicate(trip)}>
+                  <Copy className="h-4 w-4" /> Duplicate
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => void remove(trip)}>
+                  <Trash2 className="h-4 w-4" /> Delete
+                </Button>
+              </div>
             </article>
           ))}
         </div>

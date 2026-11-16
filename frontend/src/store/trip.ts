@@ -15,13 +15,17 @@ type TripState = {
   generatedDestination: string | null;
   alternatives: ParetoAlternative[];
   planningAttractions: AttractionInput[];
+  planningStartLocation: [number, number] | null;
+  planningBudget: number | null;
   annealing: PlanningResult["annealing"] | null;
   setGenerated: (
     itinerary: GeneratedItinerary,
     destination: string,
     alternatives: ParetoAlternative[],
     attractions: AttractionInput[],
-    annealing: PlanningResult["annealing"],
+    startLocation: [number, number],
+    budget: number,
+    annealing: PlanningResult["annealing"] | null,
   ) => void;
   clear: () => void;
 };
@@ -32,6 +36,8 @@ const initialTripState = {
   generatedDestination: null,
   alternatives: [],
   planningAttractions: [],
+  planningStartLocation: null,
+  planningBudget: null,
   annealing: null,
 };
 
@@ -40,7 +46,23 @@ export const useTripStore = create<TripState>((set) => ({
   add: (d) =>
     set((s) => (s.selected.some((x) => x.id === d.id) ? s : { selected: [...s.selected, d] })),
   remove: (id) => set((s) => ({ selected: s.selected.filter((x) => x.id !== id) })),
-  setGenerated: (generated, generatedDestination, alternatives, planningAttractions, annealing) =>
-    set({ generated, generatedDestination, alternatives, planningAttractions, annealing }),
+  setGenerated: (
+    generated,
+    generatedDestination,
+    alternatives,
+    planningAttractions,
+    planningStartLocation,
+    planningBudget,
+    annealing,
+  ) =>
+    set({
+      generated,
+      generatedDestination,
+      alternatives,
+      planningAttractions,
+      planningStartLocation,
+      planningBudget,
+      annealing,
+    }),
   clear: () => set(initialTripState),
 }));

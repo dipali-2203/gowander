@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 import os
+from datetime import datetime, timezone
 
 from app.database import get_db
 from app.models import Trip, Attraction, User
@@ -22,6 +23,7 @@ from app.schemas import (
     OptimizeRequest,
     Preferences,
     TripCreate,
+    TripUpdate,
     ReplanRequest,
     ReplanResponse,
     ScenarioReplanRequest,
@@ -36,8 +38,53 @@ from app.services.preference_learning import apply_feedback
 from app.services.risk import calculate_attraction_risk, simulate_completion_probability
 from app.services.conditions import estimated_conditions
 from app.services.annealing import generate_annealed_itinerary
+from app.services.budget import attraction_budget_after_fixed_costs, estimate_trip_budget
 
 router = APIRouter(prefix="/api/v1/trips", tags=["Trips"], dependencies=[Depends(require_trip_access)])
+
+
+def _build_saved_multiday_plan(trip: Trip, request: MultiDayOptimizeRequest):
+    def generate(attraction_budget: float):
+        return generate_multiday_greedy(
+            attractions=request.attractions,
+            preferences=Preferences.model_validate(trip.preferences),
+            start_date=trip.start_date,
+            end_date=trip.end_date,
+            start_latitude=trip.start_latitude,
+            start_longitude=trip.start_longitude,
+            budget=attraction_budget,
+            available_minutes_per_day=trip.available_minutes_per_day,
+            meal_breaks=request.meal_breaks,
+            confirmed_activities=request.confirmed_activities,
+            routing_provider=os.getenv("ROUTING_PROVIDER", "haversine"),
+        )
+
+    allocation = attraction_budget_after_fixed_costs(trip)
+    result = generate(allocation)
+    estimate = estimate_trip_budget(
+        trip=trip, days=result["days"], attractions=request.attractions, data_source=request.data_source,
+    )
+    transport_amount = next(
+        (item["amount"] for item in estimate["categories"] if item["key"] == "transportation"), 0.0,
+    )
+    adjusted_allocation = max(0.0, allocation - transport_amount)
+    if adjusted_allocation < allocation and result["total_cost"] > adjusted_allocation:
+        result = generate(adjusted_allocation)
+        estimate = estimate_trip_budget(
+            trip=trip, days=result["days"], attractions=request.attractions, data_source=request.data_source,
+        )
+    result["budget_estimate"] = estimate
+    if not estimate["within_budget"]:
+        result["feasible"] = False
+        result["warnings"].append(
+            f"Estimated full-trip costs exceed the budget by ₹{abs(estimate['remaining_budget']):,.0f}; review the fallback assumptions or adjust trip inputs."
+        )
+    if allocation <= 0:
+        result["warnings"].append(
+            "Estimated accommodation, meals, and miscellaneous costs use the full trip budget, leaving no attraction budget."
+        )
+        result["feasible"] = False
+    return result
 
 
 @router.get("")
@@ -45,18 +92,25 @@ def list_trips(db: Session = Depends(get_db), user: User = Depends(get_current_u
     trips = (
         db.query(Trip)
         .filter(Trip.owner_user_id == user.id)
-        .order_by(Trip.created_at.desc(), Trip.id.desc())
+        .order_by(Trip.updated_at.desc(), Trip.created_at.desc(), Trip.id.desc())
         .all()
     )
     return [
         {
             "id": trip.id,
+            "name": trip.name or trip.destination,
+            "origin": trip.origin,
             "destination": trip.destination,
             "start_date": str(trip.start_date),
             "end_date": str(trip.end_date),
             "budget": trip.budget,
+            "preferences": trip.preferences,
+            "planning_options": trip.planning_options,
+            "optimization_results": trip.optimization_results,
             "latest_itinerary": trip.latest_itinerary,
             "created_at": trip.created_at.isoformat() if trip.created_at else None,
+            "updated_at": trip.updated_at.isoformat() if trip.updated_at else None,
+            "itinerary_stale": trip.itinerary_stale,
         }
         for trip in trips
     ]
@@ -70,6 +124,8 @@ def create_trip(
 ):
     trip = Trip(
         owner_user_id=user.id,
+        name=(request.name or request.destination).strip(),
+        origin=request.origin.strip(),
         destination=request.destination,
         start_date=request.start_date,
         end_date=request.end_date,
@@ -78,6 +134,7 @@ def create_trip(
         start_latitude=request.start_latitude,
         start_longitude=request.start_longitude,
         preferences=request.preferences.model_dump(),
+        planning_options=request.planning_options.model_dump(),
     )
 
     db.add(trip)
@@ -86,10 +143,13 @@ def create_trip(
 
     return {
         "id": trip.id,
+        "name": trip.name,
+        "origin": trip.origin,
         "destination": trip.destination,
         "start_date": str(trip.start_date),
         "end_date": str(trip.end_date),
         "budget": trip.budget,
+        "planning_options": trip.planning_options,
     }
 
 
@@ -108,13 +168,92 @@ def get_trip(
 
     return {
         "id": trip.id,
+        "name": trip.name or trip.destination,
+        "origin": trip.origin,
         "destination": trip.destination,
         "start_date": str(trip.start_date),
         "end_date": str(trip.end_date),
         "budget": trip.budget,
         "preferences": trip.preferences,
+        "planning_options": trip.planning_options,
+        "planning_inputs": trip.planning_inputs,
+        "optimization_results": trip.optimization_results,
         "latest_itinerary": trip.latest_itinerary,
+        "created_at": trip.created_at.isoformat() if trip.created_at else None,
+        "updated_at": trip.updated_at.isoformat() if trip.updated_at else None,
+        "itinerary_stale": trip.itinerary_stale,
     }
+
+
+@router.put("/{trip_id}")
+def update_trip(trip_id: int, request: TripUpdate, db: Session = Depends(get_db)):
+    trip = db.get(Trip, trip_id)
+    if trip is None:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    changes = request.model_dump(exclude_unset=True)
+    itinerary_inputs = {
+        "origin", "destination", "start_date", "end_date", "budget",
+        "available_minutes_per_day", "start_latitude", "start_longitude",
+        "preferences", "planning_options",
+    }
+    if "preferences" in changes and changes["preferences"] is not None:
+        changes["preferences"] = request.preferences.model_dump()
+    if "planning_options" in changes and changes["planning_options"] is not None:
+        changes["planning_options"] = request.planning_options.model_dump()
+    start_date = changes.get("start_date", trip.start_date)
+    end_date = changes.get("end_date", trip.end_date)
+    if end_date < start_date:
+        raise HTTPException(status_code=422, detail="end_date must not precede start_date")
+    for key, value in changes.items():
+        if value is not None:
+            setattr(trip, key, value)
+    if itinerary_inputs.intersection(changes):
+        trip.itinerary_stale = True
+    trip.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(trip)
+    return {"trip": {"id": trip.id, "name": trip.name, "destination": trip.destination,
+                     "start_date": str(trip.start_date), "end_date": str(trip.end_date),
+                     "budget": trip.budget, "latest_itinerary": trip.latest_itinerary}}
+
+
+@router.post("/{trip_id}/duplicate", status_code=201)
+def duplicate_trip(trip_id: int, db: Session = Depends(get_db)):
+    source = db.get(Trip, trip_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    duplicate = Trip(
+        owner_user_id=source.owner_user_id,
+        name=f"{source.name or source.destination} (copy)"[:150],
+        origin=source.origin,
+        destination=source.destination,
+        start_date=source.start_date,
+        end_date=source.end_date,
+        budget=source.budget,
+        available_minutes_per_day=source.available_minutes_per_day,
+        start_latitude=source.start_latitude,
+        start_longitude=source.start_longitude,
+        preferences=source.preferences,
+        planning_options=source.planning_options,
+        planning_inputs=source.planning_inputs,
+        optimization_results=source.optimization_results,
+        latest_itinerary=source.latest_itinerary,
+        itinerary_stale=source.itinerary_stale,
+    )
+    db.add(duplicate)
+    db.commit()
+    db.refresh(duplicate)
+    return {"id": duplicate.id, "name": duplicate.name}
+
+
+@router.delete("/{trip_id}")
+def delete_trip(trip_id: int, db: Session = Depends(get_db)):
+    trip = db.get(Trip, trip_id)
+    if trip is None:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    db.delete(trip)
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/{trip_id}/preference-feedback")
@@ -133,7 +272,16 @@ def simulate_trip_risk(trip_id: int, request: RiskSimulationRequest, db: Session
     if db.get(Trip, trip_id) is None:
         raise HTTPException(status_code=404, detail="Trip not found")
     completion, expected = simulate_completion_probability(
-        [calculate_attraction_risk(item) for item in request.attractions], request.scenarios, request.seed,
+        [
+            calculate_attraction_risk(
+                item.weather_risk,
+                item.crowd_risk,
+                item.availability_risk,
+            )
+            for item in request.attractions
+        ],
+        request.scenarios,
+        request.seed,
     )
     return RiskSimulationResponse(
         trip_id=trip_id, scenarios=request.scenarios, seed=request.seed,
@@ -199,7 +347,7 @@ def optimize_trip(
             preferences=preferences,
             start_latitude=trip.start_latitude,
             start_longitude=trip.start_longitude,
-            budget=trip.budget,
+            budget=attraction_budget_after_fixed_costs(trip),
             available_minutes=trip.available_minutes_per_day,
             travel_matrix=travel_matrix,
         )
@@ -217,6 +365,8 @@ def optimize_trip(
     )
 
     trip.latest_itinerary = response.model_dump(mode="json")
+    trip.itinerary_stale = False
+    trip.optimization_results = {}
     db.commit()
 
     return response
@@ -232,25 +382,52 @@ def optimize_multiday_trip(
     if trip is None:
         raise HTTPException(status_code=404, detail="Trip not found")
     try:
-        result = generate_multiday_greedy(
-            attractions=request.attractions,
-            preferences=Preferences.model_validate(trip.preferences),
-            start_date=trip.start_date,
-            end_date=trip.end_date,
-            start_latitude=trip.start_latitude,
-            start_longitude=trip.start_longitude,
-            budget=trip.budget,
-            available_minutes_per_day=trip.available_minutes_per_day,
-            meal_breaks=request.meal_breaks,
-            confirmed_activities=request.confirmed_activities,
-            routing_provider=os.getenv("ROUTING_PROVIDER", "haversine"),
-        )
+        result = _build_saved_multiday_plan(trip, request)
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     response = MultiDayItineraryResponse(
         trip_id=trip.id, algorithm="greedy_multiday", data_source=request.data_source, **result
     )
     trip.latest_itinerary = response.model_dump(mode="json")
+    trip.planning_inputs = request.model_dump(mode="json")
+    trip.itinerary_stale = False
+    trip.optimization_results = {}
+    db.commit()
+    return response
+
+
+@router.post("/{trip_id}/regenerate", response_model=MultiDayItineraryResponse)
+def regenerate_saved_trip(trip_id: int, db: Session = Depends(get_db)):
+    trip = db.get(Trip, trip_id)
+    if trip is None:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    if not trip.planning_inputs:
+        raise HTTPException(
+            status_code=409,
+            detail="This trip does not have saved attraction inputs. Generate a new itinerary from the planner first.",
+        )
+    try:
+        request = MultiDayOptimizeRequest.model_validate(trip.planning_inputs)
+        result = _build_saved_multiday_plan(trip, request)
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not result["feasible"]:
+        reasons = " ".join(result["warnings"])
+        raise HTTPException(
+            status_code=422,
+            detail=f"The updated constraints do not produce a feasible replacement itinerary. {reasons}".strip(),
+        )
+    response = MultiDayItineraryResponse(
+        trip_id=trip.id,
+        algorithm="greedy_multiday",
+        data_source=request.data_source,
+        **result,
+    )
+    # Replace the saved plan only after a complete replacement has been built.
+    trip.latest_itinerary = response.model_dump(mode="json")
+    trip.updated_at = datetime.now(timezone.utc)
+    trip.itinerary_stale = False
+    trip.optimization_results = {}
     db.commit()
     return response
 
@@ -268,16 +445,22 @@ def generate_pareto_alternatives(trip_id: int, request: ParetoRequest, db: Sessi
         alternatives = generate_nsga2_alternatives(
             attractions=request.attractions, preferences=Preferences.model_validate(trip.preferences),
             start_latitude=trip.start_latitude, start_longitude=trip.start_longitude,
-            budget=trip.budget, available_minutes=trip.available_minutes_per_day,
+            budget=attraction_budget_after_fixed_costs(trip), available_minutes=trip.available_minutes_per_day,
             travel_matrix=matrix, seed=request.seed, max_alternatives=request.max_alternatives,
         )
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return ParetoResponse(
+    response = ParetoResponse(
         trip_id=trip.id, algorithm="nsga2", seed=request.seed,
         objective_note="Cost, travel-time, and risk values are planning proxies; decoded stops are validated by the greedy feasibility baseline.",
         alternatives=[{"itinerary": {"trip_id": trip.id, "algorithm": "nsga2", **item["itinerary"]}, "objectives": item["objectives"]} for item in alternatives],
     )
+    trip.optimization_results = {
+        **(trip.optimization_results or {}),
+        "pareto": [item.model_dump(mode="json") for item in response.alternatives],
+    }
+    db.commit()
+    return response
 
 
 @router.post("/{trip_id}/anneal", response_model=ItineraryResponse)
@@ -287,9 +470,21 @@ def optimize_with_annealing(trip_id: int, request: AnnealingRequest, db: Session
         raise HTTPException(status_code=404, detail="Trip not found")
     result = generate_annealed_itinerary(
         request.attractions, Preferences.model_validate(trip.preferences), trip.start_latitude,
-        trip.start_longitude, trip.budget, trip.available_minutes_per_day, request.seed,
+        trip.start_longitude, attraction_budget_after_fixed_costs(trip), trip.available_minutes_per_day, request.seed,
     )
-    return ItineraryResponse(trip_id=trip.id, algorithm="simulated_annealing", **result)
+    response = ItineraryResponse(trip_id=trip.id, algorithm="simulated_annealing", **result)
+    trip.optimization_results = {
+        **(trip.optimization_results or {}),
+        "simulated_annealing": {
+            "total_cost": result["total_cost"],
+            "total_travel_minutes": result["total_travel_minutes"],
+            "satisfaction": result["satisfaction"],
+            "risk_score": result["risk_score"],
+            "feasible": result["feasible"],
+        },
+    }
+    db.commit()
+    return response
 
 
 @router.post("/{trip_id}/replan-scenario", response_model=ScenarioReplanResponse)
@@ -400,7 +595,7 @@ def optimize_saved_trip(
             preferences=preferences,
             start_latitude=trip.start_latitude,
             start_longitude=trip.start_longitude,
-            budget=trip.budget,
+            budget=attraction_budget_after_fixed_costs(trip),
             available_minutes=trip.available_minutes_per_day,
             travel_matrix=travel_matrix,
         )
@@ -423,6 +618,7 @@ def optimize_saved_trip(
     )
 
     trip.latest_itinerary = response.model_dump(mode="json")
+    trip.itinerary_stale = False
     db.commit()
 
     return response
@@ -560,6 +756,7 @@ def replan_trip(
     )
 
     trip.latest_itinerary = response.model_dump(mode="json")
+    trip.itinerary_stale = False
     db.commit()
 
     return response

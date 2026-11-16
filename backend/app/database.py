@@ -33,6 +33,24 @@ def get_db():
 def migrate_sqlite_schema() -> None:
     """Apply additive MVP columns for existing local SQLite databases."""
     if not DATABASE_URL.startswith("sqlite"):
+        if "trips" not in inspect(engine).get_table_names():
+            return
+        trip_columns = {column["name"] for column in inspect(engine).get_columns("trips")}
+        additions = {
+            "name": "VARCHAR(150) NOT NULL DEFAULT ''",
+            "origin": "VARCHAR(100) NOT NULL DEFAULT ''",
+            "planning_options": "JSON NOT NULL DEFAULT '{}'",
+            "planning_inputs": "JSON",
+            "optimization_results": "JSON NOT NULL DEFAULT '{}'",
+            "updated_at": "TIMESTAMP WITH TIME ZONE",
+            "itinerary_stale": "BOOLEAN NOT NULL DEFAULT FALSE",
+        }
+        with engine.begin() as connection:
+            for name, definition in additions.items():
+                if name not in trip_columns:
+                    connection.execute(text(f"ALTER TABLE trips ADD COLUMN {name} {definition}"))
+            connection.execute(text("UPDATE trips SET name = destination WHERE name = ''"))
+            connection.execute(text("UPDATE trips SET updated_at = created_at WHERE updated_at IS NULL"))
         return
     inspector = inspect(engine)
     if "attractions" not in inspector.get_table_names():
@@ -49,6 +67,21 @@ def migrate_sqlite_schema() -> None:
             trip_columns = {column["name"] for column in inspect(engine).get_columns("trips")}
             if "owner_user_id" not in trip_columns:
                 connection.execute(text("ALTER TABLE trips ADD COLUMN owner_user_id INTEGER REFERENCES users(id)"))
+                trip_columns.add("owner_user_id")
+            trip_additions = {
+                "name": "VARCHAR(150) NOT NULL DEFAULT ''",
+                "origin": "VARCHAR(100) NOT NULL DEFAULT ''",
+                "planning_options": "JSON NOT NULL DEFAULT '{}'",
+                "planning_inputs": "JSON",
+                "optimization_results": "JSON NOT NULL DEFAULT '{}'",
+                "updated_at": "DATETIME",
+                "itinerary_stale": "INTEGER NOT NULL DEFAULT 0",
+            }
+            for name, definition in trip_additions.items():
+                if name not in trip_columns:
+                    connection.execute(text(f"ALTER TABLE trips ADD COLUMN {name} {definition}"))
+            connection.execute(text("UPDATE trips SET name = destination WHERE name = ''"))
+            connection.execute(text("UPDATE trips SET updated_at = created_at WHERE updated_at IS NULL"))
         if "users" in inspector.get_table_names():
             user_columns = {column["name"] for column in inspect(engine).get_columns("users")}
             if "google_subject" not in user_columns:

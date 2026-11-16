@@ -32,7 +32,6 @@ def generate_multiday_greedy(
     for index in range(number_of_days):
         day_number = index + 1
         days_left = number_of_days - index
-        usable_minutes = available_minutes_per_day
         required_ids = {
             item.attraction_id
             for item in confirmed_activities
@@ -80,11 +79,7 @@ def generate_multiday_greedy(
         flexible_start = by_id[fixed_stops[-1].attraction_id] if fixed_stops else None
         flexible_minutes = available_minutes_per_day - previous_departure
         daily_budget = remaining_budget / days_left
-        if usable_minutes <= 0:
-            result = {"stops": [], "total_cost": 0.0, "total_travel_minutes": 0,
-                      "total_visit_minutes": 0, "feasible": False,
-                      "warnings": ["Meal breaks consume the entire daily time limit."]}
-        elif not flexible_attractions or flexible_minutes <= 0:
+        if not flexible_attractions or flexible_minutes <= 0:
             result = {"stops": [], "total_cost": 0.0, "total_travel_minutes": 0,
                       "total_visit_minutes": 0, "feasible": True,
                       "warnings": ["No time remains after fixed reservations and meal breaks."] if flexible_minutes <= 0 else []}
@@ -100,6 +95,9 @@ def generate_multiday_greedy(
                 budget=max(0, daily_budget - fixed_cost), available_minutes=max(0, flexible_minutes),
                 travel_matrix=matrix, priority_attraction_ids=required_ids,
                 blocked_windows=[(item.start_minute - previous_departure, item.start_minute - previous_departure + item.duration_minutes) for item in meal_breaks if item.start_minute >= previous_departure],
+                # Spread the remaining catalog over the remaining trip days. This
+                # prevents the greedy baseline from consuming a whole catalog on day 1.
+                max_stops=max(0, (len(remaining) + days_left - 1) // days_left - len(fixed_stops)),
             )
 
         for stop in result["stops"]:
@@ -107,10 +105,23 @@ def generate_multiday_greedy(
             stop.departure_minute += previous_departure
         result["stops"] = [*fixed_stops, *result["stops"]]
         result["total_cost"] += fixed_cost
+        result["total_travel_minutes"] += sum(stop.travel_minutes_before for stop in fixed_stops)
         result["total_visit_minutes"] += sum(
             stop.departure_minute - stop.arrival_minute for stop in fixed_stops
         )
+        # The day quota intentionally leaves attractions for subsequent dates.
+        result["warnings"] = [
+            warning for warning in result["warnings"]
+            if "attractions were omitted because of budget or time constraints" not in warning
+        ]
         result["warnings"].extend(fixed_warnings)
+
+        if fixed_cost > daily_budget + 1e-9:
+            result["warnings"].append("Confirmed activities exceed the allocated daily budget.")
+        if result["stops"] and result["stops"][-1].departure_minute > available_minutes_per_day:
+            result["warnings"].append("The schedule exceeds the daily time limit.")
+        if not result["stops"] and not result["warnings"]:
+            result["warnings"].append("No available attractions fit this day's time and budget constraints.")
 
         selected_ids = {stop.attraction_id for stop in result["stops"]}
         missing_required = required_ids - selected_ids
@@ -125,7 +136,8 @@ def generate_multiday_greedy(
             "total_travel_minutes": result["total_travel_minutes"],
             "total_visit_minutes": result["total_visit_minutes"],
             "reserved_break_minutes": break_minutes,
-            "feasible": result["feasible"] and not missing_required and not fixed_warnings,
+            "meal_breaks": meal_breaks,
+            "feasible": result["feasible"] and not missing_required and not result["warnings"],
             "warnings": day_warnings,
         })
         remaining_budget -= result["total_cost"]
@@ -134,6 +146,10 @@ def generate_multiday_greedy(
     for item in confirmed_activities:
         if item.day_number > number_of_days:
             warnings.append(f"Confirmed activity {item.attraction_id} refers to a day outside the trip.")
+    if remaining:
+        warnings.append(
+            f"{len(remaining)} attractions remain unscheduled after applying daily time and budget limits."
+        )
     total_cost = sum(day["total_cost"] for day in days)
     stop_list = [stop for day in days for stop in day["stops"]]
     survival = 1.0

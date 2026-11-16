@@ -24,6 +24,7 @@ export type GeneratedItinerary = {
     total_travel_minutes: number;
     total_visit_minutes: number;
     reserved_break_minutes: number;
+    meal_breaks: Array<{ start_minute: number; duration_minutes: number }>;
     feasible: boolean;
     warnings: string[];
     stops: Array<{
@@ -46,6 +47,29 @@ export type GeneratedItinerary = {
   feasible: boolean;
   warnings: string[];
   data_source: "synthetic" | "user_supplied";
+  budget_estimate?: TripBudgetEstimate | null;
+};
+
+export type TripBudgetEstimate = {
+  currency: "INR";
+  total_estimated: number;
+  per_person: number;
+  daily_average: number;
+  budget_limit: number;
+  remaining_budget: number;
+  within_budget: boolean;
+  categories: Array<{
+    key: string;
+    label: string;
+    amount: number;
+    source: string;
+    confidence: string;
+    range_min: number;
+    range_max: number;
+    assumptions: string[];
+  }>;
+  exclusions: string[];
+  last_updated: string | null;
 };
 
 export type ParetoAlternative = {
@@ -62,6 +86,8 @@ export type PlanningResult = {
   itinerary: GeneratedItinerary;
   alternatives: ParetoAlternative[];
   attractions: AttractionInput[];
+  startLocation: [number, number];
+  budget: number;
   annealing: {
     total_cost: number;
     total_travel_minutes: number;
@@ -130,12 +156,52 @@ export type UserTravelPreferences = {
 
 export type AccountTrip = {
   id: number;
+  name: string;
+  origin: string;
   destination: string;
   start_date: string;
   end_date: string;
   budget: number;
-  latest_itinerary: Record<string, unknown> | null;
+  preferences: Record<string, unknown>;
+  planning_options: TripPlanningOptions;
+  optimization_results: {
+    pareto?: ParetoAlternative[];
+    simulated_annealing?: {
+      total_cost: number;
+      total_travel_minutes: number;
+      satisfaction: number;
+      risk_score: number;
+      feasible: boolean;
+    };
+  };
+  latest_itinerary: GeneratedItinerary | null;
   created_at: string | null;
+  updated_at: string | null;
+  itinerary_stale: boolean;
+};
+
+export type TripPlanningOptions = {
+  traveler_count: number;
+  transportation_mode: string;
+  accommodation_category: "budget" | "standard" | "premium" | "luxury";
+  meal_preferences: string[];
+  miscellaneous_budget: number;
+};
+
+export type TripDetails = AccountTrip & {
+  start_latitude: number;
+  start_longitude: number;
+  available_minutes_per_day: number;
+  planning_inputs: {
+    attractions: AttractionInput[];
+    meal_breaks: Array<{ start_minute: number; duration_minutes: number }>;
+    confirmed_activities: Array<{
+      attraction_id: string;
+      day_number: number;
+      start_minute: number;
+    }>;
+    data_source: "synthetic" | "user_supplied";
+  } | null;
 };
 
 const apiBaseUrl = import.meta.env["VITE_API_BASE_URL"] ?? "http://localhost:8000";
@@ -154,14 +220,24 @@ export async function disconnectGoogleAccount() {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${apiBaseUrl}${path}`, {
-    headers: { "content-type": "application/json", ...init?.headers },
-    credentials: "include",
-    ...init,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${apiBaseUrl}${path}`, {
+      headers: { "content-type": "application/json", ...init?.headers },
+      credentials: "include",
+      ...init,
+    });
+  } catch {
+    throw new Error(
+      `Cannot reach the trip service at ${apiBaseUrl}. Check that the backend is running and allows this frontend origin.`,
+    );
+  }
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as { detail?: string } | null;
-    throw new Error(body?.detail ?? "The planning service could not complete the request.");
+    throw new Error(
+      body?.detail ??
+        `The planning service could not complete the request (HTTP ${response.status}).`,
+    );
   }
   return response.json() as Promise<T>;
 }
@@ -254,6 +330,49 @@ export async function getUserTrips() {
   return request<AccountTrip[]>("/api/v1/trips");
 }
 
+export async function getTrip(tripId: number) {
+  return request<TripDetails>(`/api/v1/trips/${tripId}`);
+}
+
+export async function updateTrip(
+  tripId: number,
+  input: Partial<
+    Pick<
+      TripDetails,
+      | "name"
+      | "origin"
+      | "destination"
+      | "start_date"
+      | "end_date"
+      | "budget"
+      | "available_minutes_per_day"
+      | "preferences"
+      | "planning_options"
+    >
+  >,
+) {
+  return request<{ trip: TripDetails }>(`/api/v1/trips/${tripId}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function duplicateTrip(tripId: number) {
+  return request<{ id: number; name: string }>(`/api/v1/trips/${tripId}/duplicate`, {
+    method: "POST",
+  });
+}
+
+export async function deleteTrip(tripId: number) {
+  return request<{ ok: boolean }>(`/api/v1/trips/${tripId}`, { method: "DELETE" });
+}
+
+export async function regenerateTrip(tripId: number) {
+  return request<GeneratedItinerary>(`/api/v1/trips/${tripId}/regenerate`, {
+    method: "POST",
+  });
+}
+
 export async function signOut() {
   return request<{ ok: boolean }>("/api/v1/auth/logout", { method: "POST" });
 }
@@ -273,9 +392,14 @@ export async function confirmPasswordReset(token: string, password: string) {
 }
 
 export async function createAndOptimizeTrip(input: {
+  origin: string;
   destination: string;
   days: number;
   budget: number;
+  travelerCount: number;
+  accommodationCategory: TripPlanningOptions["accommodation_category"];
+  miscellaneousBudget: number;
+  mealPreferences: string[];
   interests: string[];
   preferences: {
     riskTolerance: number;
@@ -298,7 +422,8 @@ export async function createAndOptimizeTrip(input: {
   const start = new Date();
   const end = new Date(start);
   end.setDate(start.getDate() + Math.max(0, input.days - 1));
-  const toIsoDate = (value: Date) => value.toISOString().slice(0, 10);
+  const toIsoDate = (value: Date) =>
+    `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
   const interestMap = Object.fromEntries(
     input.interests.map((interest) => [
       (
@@ -322,11 +447,14 @@ export async function createAndOptimizeTrip(input: {
   const trip = await request<{ id: number }>("/api/v1/trips", {
     method: "POST",
     body: JSON.stringify({
+      name: `${input.origin} to ${input.destination}`,
+      origin: input.origin,
       destination: input.destination,
       start_date: toIsoDate(start),
       end_date: toIsoDate(end),
       budget: input.budget,
-      available_minutes_per_day: 720,
+      // Planner timestamps are minutes from midnight, so 20:00 is the daily cutoff.
+      available_minutes_per_day: 1200,
       start_latitude: startLatitude,
       start_longitude: startLongitude,
       preferences: {
@@ -337,6 +465,13 @@ export async function createAndOptimizeTrip(input: {
         budget_sensitivity: 1 - input.preferences.pace,
         travel_pace: input.preferences.pace,
         preferred_transport: input.preferences.transport,
+      },
+      planning_options: {
+        traveler_count: input.travelerCount,
+        transportation_mode: input.preferences.transport,
+        accommodation_category: input.accommodationCategory,
+        meal_preferences: input.mealPreferences,
+        miscellaneous_budget: input.miscellaneousBudget,
       },
     }),
   });
@@ -378,6 +513,8 @@ export async function createAndOptimizeTrip(input: {
     itinerary,
     alternatives: pareto.alternatives,
     attractions: catalog.attractions,
+    startLocation: [startLatitude, startLongitude],
+    budget: input.budget,
     annealing,
   };
 }
@@ -391,19 +528,21 @@ export function replanScenario(
     affected_attraction_ids?: string[];
   }>,
   remainingBudget = 60000,
-  remainingMinutes = 720,
+  remainingMinutes = 1200,
   previousPlannedAttractionIds: string[] = [],
+  completedAttractionIds: string[] = [],
+  currentLocation: [number, number] = [26.9124, 75.7873],
 ) {
   return request<ScenarioResult>(`/api/v1/trips/${tripId}/replan-scenario`, {
     method: "POST",
     body: JSON.stringify({
       attractions,
       disruptions,
-      current_latitude: 26.9124,
-      current_longitude: 75.7873,
+      current_latitude: currentLocation[0],
+      current_longitude: currentLocation[1],
       remaining_budget: remainingBudget,
       remaining_minutes: remainingMinutes,
-      completed_attraction_ids: [],
+      completed_attraction_ids: completedAttractionIds,
       closed_attraction_ids: [],
       previous_planned_attraction_ids: previousPlannedAttractionIds,
       data_source: "synthetic",
