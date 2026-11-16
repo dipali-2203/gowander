@@ -1,6 +1,6 @@
-# ADAPT-Trip
+# GoWander
 
-ADAPT-Trip is a research-oriented, risk-aware travel itinerary optimizer. The repository is organized as two independent applications:
+GoWander is a research-oriented, risk-aware travel itinerary optimizer. The repository is organized as two independent applications:
 
 - `frontend/` — React, TypeScript, Vite, TanStack Router, and Tailwind CSS.
 - `backend/` — FastAPI, Pydantic, SQLAlchemy, and the optimization baseline.
