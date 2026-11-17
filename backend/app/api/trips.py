@@ -494,8 +494,9 @@ def generate_pareto_alternatives(trip_id: int, request: ParetoRequest, db: Sessi
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     response = ParetoResponse(
         trip_id=trip.id, algorithm="nsga2", seed=request.seed,
+        optimization_scope="single_day",
         objective_note="Cost, travel-time, and risk values are planning proxies; decoded stops are validated by the greedy feasibility baseline.",
-        alternatives=[{"itinerary": {"trip_id": trip.id, "algorithm": "nsga2", **item["itinerary"]}, "objectives": item["objectives"], "risk_data_status": risk_data_status(request.attractions)} for item in alternatives],
+        alternatives=[{"itinerary": {"trip_id": trip.id, "algorithm": "nsga2", "optimization_scope": "single_day", **item["itinerary"]}, "objectives": item["objectives"], "risk_data_status": risk_data_status(request.attractions)} for item in alternatives],
     )
     trip.optimization_results = {
         **(trip.optimization_results or {}),
@@ -515,10 +516,13 @@ def optimize_with_annealing(trip_id: int, request: AnnealingRequest, db: Session
         trip.start_longitude, attraction_budget_after_fixed_costs(trip), trip.available_minutes_per_day, request.seed,
         start_minute=540 if trip.available_minutes_per_day >= 540 else 0,
     )
-    response = ItineraryResponse(trip_id=trip.id, algorithm="simulated_annealing", **result)
+    response = ItineraryResponse(
+        trip_id=trip.id, algorithm="simulated_annealing", optimization_scope="single_day", **result
+    )
     trip.optimization_results = {
         **(trip.optimization_results or {}),
         "simulated_annealing": {
+            "optimization_scope": "single_day",
             "total_cost": result["total_cost"],
             "total_travel_minutes": result["total_travel_minutes"],
             "satisfaction": result["satisfaction"],

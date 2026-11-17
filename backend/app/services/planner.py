@@ -10,6 +10,7 @@ from app.schemas import (
 from app.services.routing import TravelMatrix, build_travel_time_matrix
 from app.services.constraints import validate_itinerary
 from app.services.attraction_relevance import category_diversity_factor, inferred_walking_effort, interest_match, unsupported_interests
+from app.services.itinerary_candidates import deduplicate_itinerary_candidates, remap_matrix_for_candidates
 
 
 def distance_km(
@@ -111,8 +112,10 @@ def generate_greedy_itinerary(
 ) -> dict:
     """Generate a feasible greedy itinerary for one planning day."""
 
+    original_attractions = attractions
+    attractions, duplicate_warnings = deduplicate_itinerary_candidates(attractions)
     if len({a.id for a in attractions}) != len(attractions):
-        raise ValueError("Attraction IDs must be unique.")
+        raise ValueError("Attraction IDs must be unique after duplicate filtering.")
 
     numbers = [
         start_latitude,
@@ -135,6 +138,10 @@ def generate_greedy_itinerary(
             start=(start_latitude, start_longitude),
             attractions=attractions,
             provider="haversine",
+        )
+    else:
+        travel_matrix = remap_matrix_for_candidates(
+            travel_matrix, original_attractions, attractions
         )
 
     expected_size = len(attractions) + 1
@@ -176,12 +183,30 @@ def generate_greedy_itinerary(
                 continue
 
             arrival = elapsed + travel
-            wait = max(0, attraction.opening_minute - arrival)
+            # Unknown hours use the application's assumed day bounds for
+            # feasibility, but must not create a false "waiting for opening" claim.
+            verified_opening_wait = (
+                max(0, attraction.opening_minute - arrival)
+                if attraction.opening_window_known is not False
+                else 0
+            )
+            wait = verified_opening_wait
             scheduled_arrival = arrival + wait
+            wait_reasons = []
+            if verified_opening_wait:
+                opening_label = "verified opening time" if attraction.opening_window_known is True else "configured opening-time assumption"
+                wait_reasons.append(
+                    f"Waiting for {opening_label} (opens at {attraction.opening_minute // 60:02d}:{attraction.opening_minute % 60:02d})."
+                )
             if blocked_windows:
                 for block_start, block_end in sorted(blocked_windows):
                     if scheduled_arrival < block_end and scheduled_arrival + attraction.visit_minutes > block_start:
+                        additional_wait = max(0, block_end - scheduled_arrival)
                         scheduled_arrival = block_end
+                        wait += additional_wait
+                        wait_reasons.append(
+                            f"Scheduled meal or rest break runs until {block_end // 60:02d}:{block_end % 60:02d}."
+                        )
             departure = scheduled_arrival + attraction.visit_minutes
             required_minutes = departure - elapsed
 
@@ -224,11 +249,22 @@ def generate_greedy_itinerary(
                     risk,
                     attraction_index,
                     scheduled_arrival - arrival,
+                    "; ".join(wait_reasons) or None,
                 )
             )
 
         if not candidates:
             break
+
+        # Prefer attractions that can be visited without a long idle gap. If
+        # every feasible candidate has a long wait, choose among those near the
+        # shortest wait and disclose whether hours or a scheduled break caused it.
+        short_wait_candidates = [item for item in candidates if item[5] <= 45]
+        if short_wait_candidates:
+            candidates = short_wait_candidates
+        else:
+            shortest_wait = min(item[5] for item in candidates)
+            candidates = [item for item in candidates if item[5] <= shortest_wait + 15]
 
         # Deterministic tie-breaking makes baseline tests reproducible.
         candidates.sort(
@@ -238,7 +274,7 @@ def generate_greedy_itinerary(
             )
         )
 
-        _, selected, travel, risk, selected_index, wait = candidates[0]
+        _, selected, travel, risk, selected_index, wait, wait_reason = candidates[0]
 
         arrival = elapsed + travel
         scheduled_arrival = arrival + wait
@@ -256,6 +292,7 @@ def generate_greedy_itinerary(
                 risk_score=calculate_attraction_risk(selected),
                 risk_data_status=risk_data_status([selected]),
                 wait_minutes=wait,
+                wait_reason=wait_reason,
             )
         )
 
@@ -288,7 +325,7 @@ def generate_greedy_itinerary(
         else:
             trip_survival *= 1.0 - stop.risk_score
 
-    warnings = []
+    warnings = list(duplicate_warnings)
 
     if any(attraction.opening_window_known is False for attraction in remaining + [stop_attraction for stop_attraction in attractions if stop_attraction.id in {stop.attraction_id for stop in stops}]):
         warnings.append("Some opening hours are unknown; the 09:00–19:00 planning window is an assumption, not verified business hours.")

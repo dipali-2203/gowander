@@ -181,7 +181,15 @@ function Itinerary() {
   const inspectConditions = async () => {
     if (!generated || planningAttractions.length === 0) return;
     try {
-      setConditions(await loadConditions(generated.trip_id, planningAttractions));
+      const plannedIds = new Set(
+        generated.days.flatMap((day) => day.stops.map((stop) => stop.attraction_id)),
+      );
+      const plannedAttractions = planningAttractions.filter((item) => plannedIds.has(item.id));
+      if (plannedAttractions.length === 0) {
+        toast.error("This itinerary has no scheduled attractions to inspect.");
+        return;
+      }
+      setConditions(await loadConditions(generated.trip_id, plannedAttractions));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not load planning conditions.");
     }
@@ -275,7 +283,7 @@ function Itinerary() {
         time: `${formatClock(stop.arrival_minute)}–${formatClock(stop.departure_minute)}`,
         attractionId: stop.attraction_id,
         title: stop.name,
-        detail: `${stop.departure_minute - stop.arrival_minute} min ${planningAttractions.find((item) => item.id === stop.attraction_id)?.visit_duration_known === false ? "planned (duration unknown; estimate)" : "visit"} · ${stop.travel_minutes_before} min estimated travel${stop.wait_minutes ? ` · ${stop.wait_minutes} min wait` : ""}`,
+        detail: `${stop.departure_minute - stop.arrival_minute} min ${planningAttractions.find((item) => item.id === stop.attraction_id)?.visit_duration_known === false ? "planned (duration unknown; estimate)" : "visit"} · ${stop.travel_minutes_before} min estimated travel${stop.wait_minutes ? ` · ${stop.wait_minutes} min waiting${stop.wait_reason ? ` — ${stop.wait_reason}` : ""}` : ""}`,
         cost: stop.cost,
       })),
       ...(day.stops.length > 0 ? day.meal_breaks : []).map((meal) => ({
@@ -306,7 +314,10 @@ function Itinerary() {
   const intercityNotice = savedTrips.find((trip) => trip.id === generated.trip_id)?.origin;
   const total = budgetEstimate?.total_estimated ?? generated.total_cost;
   const displayBreakdown = budgetEstimate?.categories.map((item) => ({
-    name: item.label,
+    name:
+      item.key === "attractions" && unknownFeeCount > 0
+        ? `${item.label} amounts (${unknownFeeCount} fee${unknownFeeCount === 1 ? "" : "s"} unknown)`
+        : item.label,
     value: item.amount,
     assumptions: item.assumptions,
     source: item.source,
@@ -408,36 +419,10 @@ function Itinerary() {
                     Risk data status: {generated.risk_data_status}. Unknown risk remains unavailable
                     and is not treated as a verified zero.
                   </p>
-                  {generated.days.flatMap((day) => day.stops).length > 0 && (
-                    <ul className="list-inside list-disc space-y-1">
-                      {generated.days
-                        .flatMap((day) => day.stops)
-                        .map((stop) => (
-                          <li key={stop.attraction_id}>
-                            {stop.name}:{" "}
-                            {riskDetailsLabel(
-                              stop.risk_score,
-                              stop.risk_data_status,
-                              planningAttractions.find((item) => item.id === stop.attraction_id)
-                                ?.risk_metadata,
-                            )}
-                            {(() => {
-                              const place = planningAttractions.find(
-                                (item) => item.id === stop.attraction_id,
-                              );
-                              return ` · planning relevance ${Math.round((place?.priority_score ?? 0.5) * 100)}% (${place?.priority_reasons?.join("; ") || "category and interest match"})`;
-                            })()}
-                          </li>
-                        ))}
-                    </ul>
-                  )}
-                  {detailedWarnings.length > 0 && (
-                    <ul className="list-inside list-disc space-y-1">
-                      {detailedWarnings.map((warning) => (
-                        <li key={warning}>{warning}</li>
-                      ))}
-                    </ul>
-                  )}
+                  <p>
+                    Detailed risk inputs and optimizer assumptions are in Advanced Optimization
+                    Insights below.
+                  </p>
                 </div>
               </details>
             </section>
@@ -557,7 +542,9 @@ function Itinerary() {
           </div>
 
           <div className="surface space-y-3 p-5">
-            <h2 className="font-semibold">Budget summary</h2>
+            <h2 className="font-semibold">
+              {budgetEstimate ? "Estimated destination expenses" : "Attraction fees"}
+            </h2>
             <p className="text-3xl font-semibold tracking-tight">
               ₹{total.toLocaleString("en-IN")}
             </p>
@@ -576,17 +563,18 @@ function Itinerary() {
                 </p>
                 <p>
                   {budgetEstimate.within_budget
-                    ? `₹${budgetEstimate.remaining_budget.toLocaleString("en-IN")} estimated remaining`
-                    : `₹${Math.abs(budgetEstimate.remaining_budget).toLocaleString("en-IN")} over budget`}
+                    ? `Listed estimates are ₹${budgetEstimate.remaining_budget.toLocaleString("en-IN")} below your budget`
+                    : `Listed estimates are ₹${Math.abs(budgetEstimate.remaining_budget).toLocaleString("en-IN")} over your budget`}
                 </p>
                 <p>
-                  Estimated budget use:{" "}
+                  Estimated destination expenses:{" "}
                   {budgetEstimate.budget_limit > 0
                     ? Math.round(
                         (budgetEstimate.total_estimated / budgetEstimate.budget_limit) * 100,
                       )
                     : 0}
-                  % of ₹{budgetEstimate.budget_limit.toLocaleString("en-IN")}
+                  % of your ₹{budgetEstimate.budget_limit.toLocaleString("en-IN")} budget. Intercity
+                  travel and unknown attraction fees are excluded.
                 </p>
               </div>
             ) : (
@@ -613,234 +601,295 @@ function Itinerary() {
                 </div>
               ))}
             </div>
-            {budgetEstimate?.exclusions.map((exclusion) => (
-              <p key={exclusion} className="text-[11px] text-muted-foreground">
-                {exclusion}
-              </p>
-            ))}
+            {budgetEstimate?.exclusions.length ? (
+              <div
+                className="space-y-1 rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground"
+                role="note"
+                aria-label="Budget exclusions"
+              >
+                <p className="font-medium text-foreground">Excluded costs and estimate limits</p>
+                {budgetEstimate.exclusions.map((exclusion) => (
+                  <p key={exclusion}>{exclusion}</p>
+                ))}
+              </div>
+            ) : null}
           </div>
-          {generated ? (
-            <div className="surface space-y-3 p-5">
-              <div className="flex items-start justify-between gap-3">
+          <details className="surface p-4">
+            <summary className="cursor-pointer font-semibold">
+              Advanced Optimization Insights
+            </summary>
+            <div className="mt-4 space-y-4">
+              <section className="space-y-3 rounded-lg border border-border p-4">
                 <div>
-                  <h2 className="font-semibold">Reliability estimate</h2>
+                  <h2 className="font-semibold">Optimizer assumptions and technical warnings</h2>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Seeded disruption scenarios for the selected stops, using their weather, crowd
-                    and availability risk inputs ({generated.data_source}).
+                    Risk, relevance, and feasibility signals are limited by the available catalog
+                    data; unknown values are not verified zeros.
                   </p>
                 </div>
-                <Button size="sm" variant="outline" onClick={assessReliability}>
-                  Assess
-                </Button>
-              </div>
-              {reliability ? (
-                <div className="text-sm">
-                  {reliability.completion_probability === null ||
-                  reliability.expected_disruptions === null ? (
-                    <p className="font-medium">Risk data unavailable</p>
-                  ) : (
-                    <>
-                      <p className="text-2xl font-semibold">
-                        {Math.round(reliability.completion_probability * 100)}%
-                      </p>
+                {generated.days.flatMap((day) => day.stops).length > 0 ? (
+                  <ul className="max-h-72 space-y-1 overflow-auto text-xs text-muted-foreground">
+                    {generated.days
+                      .flatMap((day) => day.stops)
+                      .map((stop) => {
+                        const place = planningAttractions.find(
+                          (item) => item.id === stop.attraction_id,
+                        );
+                        return (
+                          <li key={stop.attraction_id}>
+                            {stop.name}:{" "}
+                            {riskDetailsLabel(
+                              stop.risk_score,
+                              stop.risk_data_status,
+                              place?.risk_metadata,
+                            )}
+                            ; planning relevance {Math.round((place?.priority_score ?? 0.5) * 100)}%
+                            ({place?.priority_reasons?.join("; ") || "category and interest match"})
+                          </li>
+                        );
+                      })}
+                  </ul>
+                ) : null}
+                {detailedWarnings.length > 0 ? (
+                  <ul className="max-h-56 list-inside list-disc space-y-1 overflow-auto text-xs text-muted-foreground">
+                    {detailedWarnings.map((warning) => (
+                      <li key={warning}>{warning}</li>
+                    ))}
+                  </ul>
+                ) : null}
+              </section>
+              {generated ? (
+                <div className="surface space-y-3 p-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h2 className="font-semibold">Reliability estimate</h2>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        Estimated completion probability ·{" "}
-                        {reliability.expected_disruptions.toFixed(2)} expected disruptions (
-                        {reliability.risk_data_status})
+                        Seeded disruption scenarios for the selected stops, using their weather,
+                        crowd and availability risk inputs ({generated.data_source}).
                       </p>
-                    </>
-                  )}
-                  {reliability.completion_probability === null ? (
+                    </div>
+                    <Button size="sm" variant="outline" onClick={assessReliability}>
+                      Assess
+                    </Button>
+                  </div>
+                  {reliability ? (
+                    <div className="text-sm">
+                      {reliability.completion_probability === null ||
+                      reliability.expected_disruptions === null ? (
+                        <p className="font-medium">Risk data unavailable</p>
+                      ) : (
+                        <>
+                          <p className="text-2xl font-semibold">
+                            {Math.round(reliability.completion_probability * 100)}%
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            Estimated completion probability ·{" "}
+                            {reliability.expected_disruptions.toFixed(2)} expected disruptions (
+                            {reliability.risk_data_status})
+                          </p>
+                        </>
+                      )}
+                      {reliability.completion_probability === null ? (
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Required risk data is incomplete, so no probability was calculated.
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+              {generated ? (
+                <div className="surface space-y-3 p-5">
+                  <div>
+                    <h2 className="font-semibold">Improve future plans</h2>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      Required risk data is incomplete, so no probability was calculated.
+                      Feedback updates category weights for this trip.
                     </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" variant="outline" onClick={() => sendFeedback(5)}>
+                      Loved it
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => sendFeedback(3)}>
+                      Neutral
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => sendFeedback(undefined, true)}
+                    >
+                      Skip similar
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+              {generated ? (
+                <div className="surface space-y-3 p-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h2 className="font-semibold">Planning conditions</h2>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Risk inputs used by this plan.
+                      </p>
+                    </div>
+                    <Button size="sm" variant="outline" onClick={inspectConditions}>
+                      Inspect
+                    </Button>
+                  </div>
+                  {conditions ? (
+                    <div className="max-h-72 space-y-2 overflow-auto text-xs text-muted-foreground">
+                      <p>
+                        Source:{" "}
+                        <span className="font-medium text-foreground">{conditions.source}</span> ·{" "}
+                        {conditions.conditions.length} attraction snapshots
+                      </p>
+                      {conditions.conditions.map((condition) => (
+                        <p key={condition.attraction_id}>
+                          {condition.attraction_id}:{" "}
+                          {[
+                            ["Weather", condition.weather_risk, condition.weather_risk_known],
+                            ["Crowd", condition.crowd_risk, condition.crowd_risk_known],
+                            [
+                              "Availability",
+                              condition.availability_risk,
+                              condition.availability_risk_known,
+                            ],
+                          ]
+                            .map(
+                              ([label, value, known]) =>
+                                `${label}: ${known ? `${Math.round(Number(value) * 100)}%` : "unknown"}`,
+                            )
+                            .join(" · ")}{" "}
+                          · {condition.risk_data_status}
+                        </p>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+              {alternatives.length > 0 ? (
+                <div className="surface space-y-3 p-5">
+                  <div>
+                    <h2 className="font-semibold">Single-day optimization alternatives (Pareto)</h2>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      NSGA-II compares attraction selection trade-offs. Time and risk columns are
+                      planning proxies; when source risk data is incomplete, the proxy omits unknown
+                      dimensions and is not a safety assessment. A low or zero score is not a safety
+                      guarantee. These are comparisons for one day and do not replace this multi-day
+                      itinerary.
+                    </p>
+                  </div>
+                  {alternatives.map((alternative, index) => (
+                    <div
+                      key={`${alternative.objectives.cost}-${index}`}
+                      className="rounded-lg border border-border p-3 text-xs"
+                    >
+                      <p className="font-medium">Option {index + 1}</p>
+                      <div className="mt-2 grid grid-cols-2 gap-2 text-muted-foreground">
+                        <span>₹{alternative.objectives.cost.toLocaleString("en-IN")}</span>
+                        <span>{Math.round(alternative.objectives.time_proxy_minutes)} min</span>
+                        <span>
+                          {riskProxyLabel(
+                            alternative.objectives.risk_proxy,
+                            alternative.risk_data_status,
+                          )}
+                        </span>
+                        <span>Utility {alternative.objectives.utility.toFixed(2)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {annealing ? (
+                <div className="surface space-y-2 p-5 text-sm">
+                  <h2 className="font-semibold">Single-day simulated annealing comparison</h2>
+                  <p className="text-xs text-muted-foreground">
+                    This seeded search produces a one-day attraction selection, not a replacement
+                    for the full multi-day itinerary. Figures are estimates.
+                  </p>
+                  <p className="text-muted-foreground">
+                    ₹{annealing.total_cost.toLocaleString("en-IN")} ·{" "}
+                    {annealing.total_travel_minutes} min · satisfaction{" "}
+                    {annealing.satisfaction.toFixed(2)} ·{" "}
+                    {riskAssessmentLabel(annealing.risk_score, annealing.risk_data_status)}
+                  </p>
+                </div>
+              ) : null}
+              {generated ? (
+                <div className="surface space-y-3 p-5">
+                  <div>
+                    <h2 className="font-semibold">What-if replanning</h2>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Scenario inputs use synthetic estimates.
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {(["rainfall", "traffic", "crowding", "closure"] as const).map((kind) => (
+                      <Button
+                        key={kind}
+                        size="sm"
+                        variant="outline"
+                        disabled={replanning}
+                        onClick={() => simulate(kind)}
+                      >
+                        {kind}
+                      </Button>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <label className="space-y-1 text-muted-foreground">
+                      Remaining budget
+                      <input
+                        className="w-full rounded-md border border-input bg-background px-2 py-1 text-foreground"
+                        type="number"
+                        min="0"
+                        value={remainingBudget}
+                        onChange={(event) => setRemainingBudget(Number(event.target.value))}
+                      />
+                    </label>
+                    <label className="space-y-1 text-muted-foreground">
+                      Daily schedule cutoff
+                      <input
+                        className="w-full rounded-md border border-input bg-background px-2 py-1 text-foreground"
+                        type="time"
+                        value={formatClock(remainingMinutes)}
+                        onChange={(event) => {
+                          const [hoursValue, minutesValue] = event.target.value.split(":");
+                          const hours = Number(hoursValue);
+                          const minutes = Number(minutesValue);
+                          if (
+                            hoursValue &&
+                            minutesValue &&
+                            Number.isFinite(hours) &&
+                            Number.isFinite(minutes)
+                          ) {
+                            setRemainingMinutes(hours * 60 + minutes);
+                          }
+                        }}
+                      />
+                    </label>
+                  </div>
+                  {scenario ? (
+                    <div className="rounded-lg bg-muted p-3 text-xs">
+                      <p className="font-medium">Updated remaining plan</p>
+                      <p className="mt-1 text-muted-foreground">
+                        {scenario.disruptions_applied.join(", ")} · ₹
+                        {scenario.total_cost.toLocaleString("en-IN")} ·{" "}
+                        {scenario.total_travel_minutes} min
+                      </p>
+                      <p className="mt-1 text-muted-foreground">
+                        {scenario.stops.map((stop) => stop.name).join(" → ") || "No eligible stops"}
+                      </p>
+                      <p className="mt-1 text-muted-foreground">
+                        Retained {scenario.retained_planned_attraction_ids.length} planned stops ·{" "}
+                        {scenario.change_count} changes
+                      </p>
+                    </div>
                   ) : null}
                 </div>
               ) : null}
             </div>
-          ) : null}
-          {generated ? (
-            <div className="surface space-y-3 p-5">
-              <div>
-                <h2 className="font-semibold">Improve future plans</h2>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Feedback updates category weights for this trip.
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button size="sm" variant="outline" onClick={() => sendFeedback(5)}>
-                  Loved it
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => sendFeedback(3)}>
-                  Neutral
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => sendFeedback(undefined, true)}>
-                  Skip similar
-                </Button>
-              </div>
-            </div>
-          ) : null}
-          {generated ? (
-            <div className="surface space-y-3 p-5">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h2 className="font-semibold">Planning conditions</h2>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Risk inputs used by this plan.
-                  </p>
-                </div>
-                <Button size="sm" variant="outline" onClick={inspectConditions}>
-                  Inspect
-                </Button>
-              </div>
-              {conditions ? (
-                <div className="space-y-2 text-xs text-muted-foreground">
-                  <p>
-                    Source: <span className="font-medium text-foreground">{conditions.source}</span>{" "}
-                    · {conditions.conditions.length} attraction snapshots
-                  </p>
-                  {conditions.conditions.map((condition) => (
-                    <p key={condition.attraction_id}>
-                      {condition.attraction_id}:{" "}
-                      {[
-                        ["Weather", condition.weather_risk, condition.weather_risk_known],
-                        ["Crowd", condition.crowd_risk, condition.crowd_risk_known],
-                        [
-                          "Availability",
-                          condition.availability_risk,
-                          condition.availability_risk_known,
-                        ],
-                      ]
-                        .map(
-                          ([label, value, known]) =>
-                            `${label}: ${known ? `${Math.round(Number(value) * 100)}%` : "unknown"}`,
-                        )
-                        .join(" · ")}{" "}
-                      · {condition.risk_data_status}
-                    </p>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-          {alternatives.length > 0 ? (
-            <div className="surface space-y-3 p-5">
-              <div>
-                <h2 className="font-semibold">Pareto alternatives</h2>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  NSGA-II compares attraction selection trade-offs. Time and risk columns are
-                  planning proxies; when source risk data is incomplete, the proxy omits unknown
-                  dimensions and is not a safety assessment. A low or zero score is not a safety
-                  guarantee. These alternatives are single-day comparisons.
-                </p>
-              </div>
-              {alternatives.map((alternative, index) => (
-                <div
-                  key={`${alternative.objectives.cost}-${index}`}
-                  className="rounded-lg border border-border p-3 text-xs"
-                >
-                  <p className="font-medium">Option {index + 1}</p>
-                  <div className="mt-2 grid grid-cols-2 gap-2 text-muted-foreground">
-                    <span>₹{alternative.objectives.cost.toLocaleString("en-IN")}</span>
-                    <span>{Math.round(alternative.objectives.time_proxy_minutes)} min</span>
-                    <span>
-                      {riskProxyLabel(
-                        alternative.objectives.risk_proxy,
-                        alternative.risk_data_status,
-                      )}
-                    </span>
-                    <span>Utility {alternative.objectives.utility.toFixed(2)}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : null}
-          {annealing ? (
-            <div className="surface space-y-2 p-5 text-sm">
-              <h2 className="font-semibold">Simulated annealing</h2>
-              <p className="text-xs text-muted-foreground">
-                A one-day alternative selected with a seeded search; these figures are estimates.
-              </p>
-              <p className="text-muted-foreground">
-                ₹{annealing.total_cost.toLocaleString("en-IN")} · {annealing.total_travel_minutes}{" "}
-                min · satisfaction {annealing.satisfaction.toFixed(2)} ·{" "}
-                {riskAssessmentLabel(annealing.risk_score, annealing.risk_data_status)}
-              </p>
-            </div>
-          ) : null}
-          {generated ? (
-            <div className="surface space-y-3 p-5">
-              <div>
-                <h2 className="font-semibold">What-if replanning</h2>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Scenario inputs use synthetic estimates.
-                </p>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                {(["rainfall", "traffic", "crowding", "closure"] as const).map((kind) => (
-                  <Button
-                    key={kind}
-                    size="sm"
-                    variant="outline"
-                    disabled={replanning}
-                    onClick={() => simulate(kind)}
-                  >
-                    {kind}
-                  </Button>
-                ))}
-              </div>
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <label className="space-y-1 text-muted-foreground">
-                  Remaining budget
-                  <input
-                    className="w-full rounded-md border border-input bg-background px-2 py-1 text-foreground"
-                    type="number"
-                    min="0"
-                    value={remainingBudget}
-                    onChange={(event) => setRemainingBudget(Number(event.target.value))}
-                  />
-                </label>
-                <label className="space-y-1 text-muted-foreground">
-                  Daily schedule cutoff
-                  <input
-                    className="w-full rounded-md border border-input bg-background px-2 py-1 text-foreground"
-                    type="time"
-                    value={formatClock(remainingMinutes)}
-                    onChange={(event) => {
-                      const [hoursValue, minutesValue] = event.target.value.split(":");
-                      const hours = Number(hoursValue);
-                      const minutes = Number(minutesValue);
-                      if (
-                        hoursValue &&
-                        minutesValue &&
-                        Number.isFinite(hours) &&
-                        Number.isFinite(minutes)
-                      ) {
-                        setRemainingMinutes(hours * 60 + minutes);
-                      }
-                    }}
-                  />
-                </label>
-              </div>
-              {scenario ? (
-                <div className="rounded-lg bg-muted p-3 text-xs">
-                  <p className="font-medium">Updated remaining plan</p>
-                  <p className="mt-1 text-muted-foreground">
-                    {scenario.disruptions_applied.join(", ")} · ₹
-                    {scenario.total_cost.toLocaleString("en-IN")} · {scenario.total_travel_minutes}{" "}
-                    min
-                  </p>
-                  <p className="mt-1 text-muted-foreground">
-                    {scenario.stops.map((stop) => stop.name).join(" → ") || "No eligible stops"}
-                  </p>
-                  <p className="mt-1 text-muted-foreground">
-                    Retained {scenario.retained_planned_attraction_ids.length} planned stops ·{" "}
-                    {scenario.change_count} changes
-                  </p>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
+          </details>
         </aside>
       </div>
     </div>

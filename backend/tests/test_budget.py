@@ -64,7 +64,7 @@ def test_fallback_budget_uses_explicit_config_and_reports_categories(monkeypatch
     assert estimate["total_estimated"] == sum(amounts.values())
     assert estimate["per_person"] == pytest.approx(estimate["total_estimated"] / 2, abs=0.01)
     assert estimate["within_budget"] is True
-    assert any("Intercity travel" in item for item in estimate["exclusions"])
+    assert any("Intercity outbound and return" in item for item in estimate["exclusions"])
 
 
 def test_fixed_estimates_are_reserved_before_attraction_budget(monkeypatch):
@@ -87,3 +87,37 @@ def test_luxury_level_changes_configurable_hotel_and_meal_allowances(monkeypatch
         return {item["key"]: item["amount"] for item in result["categories"]}
     assert amounts(high)["accommodation"] > amounts(low)["accommodation"]
     assert amounts(high)["meals"] > amounts(low)["meals"]
+
+
+def test_unknown_attraction_fee_is_counted_and_not_reported_as_free_entry():
+    trip = make_trip()
+    attraction = AttractionInput(
+        id="unknown-fee", name="Unknown fee attraction", category="history",
+        latitude=26.92, longitude=75.82, cost=0, visit_minutes=60,
+        preference_score=0.8, data_source="osm", cost_known=False,
+    )
+    day = {
+        "total_cost": 0,
+        "stops": [ItineraryStop(
+            attraction_id=attraction.id, name=attraction.name, arrival_minute=540,
+            departure_minute=600, travel_minutes_before=0, cost=0,
+            preference_score=0.8, risk_score=None,
+        )],
+    }
+    estimate = estimate_trip_budget(
+        trip=trip, days=[day], attractions=[attraction], data_source="osm",
+    )
+    assert estimate["unknown_attraction_fee_count"] == 1
+    assert estimate["is_complete"] is False
+    assert "zero-cost optimizer placeholder" in " ".join(estimate["exclusions"])
+
+
+def test_expense_estimate_discloses_outbound_return_and_unquoted_costs():
+    estimate = estimate_trip_budget(
+        trip=make_trip(), days=[], attractions=[], data_source="osm",
+    )
+    exclusions = " ".join(estimate["exclusions"])
+    assert "outbound and return" in exclusions
+    assert "booking prices" in exclusions
+    assert "menu prices" in exclusions
+    assert "Parking" in exclusions

@@ -6,6 +6,7 @@ from app.schemas import AttractionInput, ConfirmedActivity, ItineraryStop, MealB
 from app.services.planner import calculate_attraction_risk, generate_greedy_itinerary, risk_data_status
 from app.services.routing import estimate_minutes, build_travel_time_matrix
 from app.services.attraction_relevance import unsupported_interests
+from app.services.itinerary_candidates import deduplicate_itinerary_candidates
 
 
 def generate_multiday_greedy(
@@ -26,11 +27,12 @@ def generate_multiday_greedy(
 ) -> dict:
     """Allocate attractions across days while preserving fixed reservations."""
     number_of_days = (end_date - start_date).days + 1
-    remaining = list(attractions)
+    remaining, duplicate_warnings = deduplicate_itinerary_candidates(attractions)
     remaining_budget = budget
     break_minutes = sum(item.duration_minutes for item in meal_breaks)
     days = []
-    warnings: list[str] = []
+    warnings: list[str] = list(duplicate_warnings)
+    scheduled_ids_across_days: set[str] = set()
     day_start = 540 if available_minutes_per_day >= 540 else 0
 
     for index in range(number_of_days):
@@ -52,9 +54,21 @@ def generate_multiday_greedy(
         previous_departure = day_start
         previous_location = (start_latitude, start_longitude)
         for reservation in reservations:
+            if reservation.attraction_id in scheduled_ids_across_days:
+                fixed_warnings.append(
+                    f"Duplicate confirmed activity {reservation.attraction_id} was skipped because it is already scheduled."
+                )
+                continue
             attraction = by_id.get(reservation.attraction_id)
             if attraction is None:
                 fixed_warnings.append(f"Confirmed activity {reservation.attraction_id} is unavailable.")
+                continue
+            if attraction.id in scheduled_ids_across_days or any(
+                stop.attraction_id == attraction.id for stop in fixed_stops
+            ):
+                fixed_warnings.append(
+                    f"Duplicate confirmed activity {attraction.name} was skipped because it is already scheduled."
+                )
                 continue
             if attraction.opening_window_known is False:
                 fixed_warnings.append(f"Opening hours for confirmed activity {attraction.name} are unknown; the 09:00–19:00 planning window is an assumption.")
@@ -136,6 +150,7 @@ def generate_multiday_greedy(
             result["warnings"].append("No available attractions fit this day's time and budget constraints.")
 
         selected_ids = {stop.attraction_id for stop in result["stops"]}
+        scheduled_ids_across_days.update(selected_ids)
         missing_required = required_ids - selected_ids
         fixed_violation = any(
             phrase in warning

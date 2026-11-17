@@ -474,39 +474,96 @@ function TripDetailsPage() {
               : "Unavailable"
           }
         />
-        <Summary
-          label="Saved alternatives"
-          value={`${trip.optimization_results.pareto?.length ?? 0} Pareto · ${trip.optimization_results.simulated_annealing ? "annealing available" : "no annealing result"}`}
-        />
       </section>
 
-      {trip.optimization_results.pareto?.length || trip.optimization_results.simulated_annealing ? (
-        <section className="surface space-y-3 p-5">
-          <h2 className="font-semibold">Saved optimization alternatives</h2>
-          <p className="text-xs text-muted-foreground">
-            Pareto time and risk values are planning proxies, not live travel or risk measurements.
-          </p>
-          {trip.optimization_results.pareto?.map((alternative, index) => (
-            <div key={index} className="rounded-lg border border-border p-3 text-sm">
-              <p className="font-medium">Pareto option {index + 1}</p>
-              <p className="mt-1 text-muted-foreground">
-                ₹{alternative.objectives.cost.toLocaleString("en-IN")} ·{" "}
-                {Math.round(alternative.objectives.time_proxy_minutes)} min proxy ·{" "}
-                {riskProxyLabel(alternative.objectives.risk_proxy, alternative.risk_data_status)} ·
-                utility {alternative.objectives.utility.toFixed(2)}
-              </p>
-            </div>
-          ))}
-          {trip.optimization_results.simulated_annealing ? (
-            <p className="text-sm text-muted-foreground">
-              Simulated annealing · ₹
-              {trip.optimization_results.simulated_annealing.total_cost.toLocaleString("en-IN")}{" "}
-              attraction fees · {trip.optimization_results.simulated_annealing.total_travel_minutes}{" "}
-              min estimated travel ·{" "}
-              {trip.optimization_results.simulated_annealing.feasible ? "feasible" : "incomplete"}
-            </p>
-          ) : null}
-        </section>
+      {hasDaySchedule ||
+      trip.optimization_results.pareto?.length ||
+      trip.optimization_results.simulated_annealing ? (
+        <details className="surface p-4">
+          <summary className="cursor-pointer font-semibold">Advanced Optimization Insights</summary>
+          <div className="mt-4 space-y-4">
+            {trip.optimization_results.pareto?.length ||
+            trip.optimization_results.simulated_annealing ? (
+              <section className="surface space-y-3 p-5">
+                <h2 className="font-semibold">Saved single-day optimization alternatives</h2>
+                <p className="text-xs text-muted-foreground">
+                  These are one-day comparisons, not replacements for this multi-day itinerary.
+                  Pareto time and risk values are planning proxies, not live measurements.
+                </p>
+                {trip.optimization_results.pareto?.map((alternative, index) => (
+                  <div key={index} className="rounded-lg border border-border p-3 text-sm">
+                    <p className="font-medium">Pareto option {index + 1}</p>
+                    <p className="mt-1 text-muted-foreground">
+                      ₹{alternative.objectives.cost.toLocaleString("en-IN")} ·{" "}
+                      {Math.round(alternative.objectives.time_proxy_minutes)} min proxy ·{" "}
+                      {riskProxyLabel(
+                        alternative.objectives.risk_proxy,
+                        alternative.risk_data_status,
+                      )}{" "}
+                      · utility {alternative.objectives.utility.toFixed(2)}
+                    </p>
+                  </div>
+                ))}
+                {trip.optimization_results.simulated_annealing ? (
+                  <p className="text-sm text-muted-foreground">
+                    Single-day simulated annealing · ₹
+                    {trip.optimization_results.simulated_annealing.total_cost.toLocaleString(
+                      "en-IN",
+                    )}{" "}
+                    attraction fees ·{" "}
+                    {trip.optimization_results.simulated_annealing.total_travel_minutes} min
+                    estimated travel ·{" "}
+                    {trip.optimization_results.simulated_annealing.feasible
+                      ? "feasible"
+                      : "incomplete"}
+                  </p>
+                ) : null}
+              </section>
+            ) : null}
+            {hasDaySchedule ? (
+              <section
+                className="surface space-y-2 p-3 text-xs"
+                aria-label="Saved itinerary assumptions"
+              >
+                <h2 className="font-medium">Planning conditions and warnings</h2>
+                <p className="text-sm text-muted-foreground">
+                  Some attraction details, risk assessments and transfer times are estimated or
+                  unavailable. Verify important details before travelling.
+                </p>
+                <p className="text-muted-foreground">
+                  Risk data: {itinerary?.risk_data_status ?? "unavailable"}. Risk tolerance cannot
+                  be fully applied when observations are missing.
+                </p>
+                <details>
+                  <summary className="cursor-pointer font-medium">
+                    View individual risk assessments and warnings
+                  </summary>
+                  <ul className="mt-2 list-inside list-disc space-y-1 text-muted-foreground">
+                    {itinerary?.days
+                      ?.flatMap((day) => day.stops)
+                      .map((stop) => (
+                        <li key={stop.attraction_id}>
+                          {stop.name}:{" "}
+                          {riskDetailsLabel(
+                            stop.risk_score,
+                            stop.risk_data_status,
+                            trip.planning_inputs?.attractions.find(
+                              (item) => item.id === stop.attraction_id,
+                            )?.risk_metadata,
+                          )}
+                        </li>
+                      ))}
+                    {[...new Set(itinerary?.days?.flatMap((day) => day.warnings) ?? [])].map(
+                      (warning) => (
+                        <li key={warning}>{warning}</li>
+                      ),
+                    )}
+                  </ul>
+                </details>
+              </section>
+            ) : null}
+          </div>
+        </details>
       ) : null}
 
       {hasDaySchedule ? (
@@ -524,32 +581,6 @@ function TripDetailsPage() {
               Risk data: {itinerary?.risk_data_status ?? "unavailable"}. Risk tolerance cannot be
               fully applied when observations are missing.
             </p>
-            <details>
-              <summary className="cursor-pointer font-medium">
-                View individual risk assessments and warnings
-              </summary>
-              <ul className="mt-2 list-inside list-disc space-y-1 text-muted-foreground">
-                {itinerary?.days
-                  ?.flatMap((day) => day.stops)
-                  .map((stop) => (
-                    <li key={stop.attraction_id}>
-                      {stop.name}:{" "}
-                      {riskDetailsLabel(
-                        stop.risk_score,
-                        stop.risk_data_status,
-                        trip.planning_inputs?.attractions.find(
-                          (item) => item.id === stop.attraction_id,
-                        )?.risk_metadata,
-                      )}
-                    </li>
-                  ))}
-                {[...new Set(itinerary?.days?.flatMap((day) => day.warnings) ?? [])].map(
-                  (warning) => (
-                    <li key={warning}>{warning}</li>
-                  ),
-                )}
-              </ul>
-            </details>
           </section>
           {itinerary.days!.map((day) => (
             <article key={day.day_number} className="surface space-y-3 p-5">
@@ -578,6 +609,9 @@ function TripDetailsPage() {
                           ? "planned (duration unknown; estimate)"
                           : "visit"}{" "}
                         · ₹{stop.cost.toLocaleString("en-IN")} attraction fee
+                        {stop.wait_minutes
+                          ? ` · ${stop.wait_minutes} min waiting${stop.wait_reason ? ` — ${stop.wait_reason}` : ""}`
+                          : ""}
                       </p>
                     </li>
                   ))}
@@ -614,14 +648,21 @@ function TripDetailsPage() {
       {itinerary?.budget_estimate ? (
         <section className="surface space-y-4 p-5">
           <div>
-            <h2 className="font-semibold">Estimated full-trip budget</h2>
+            <h2 className="font-semibold">Estimated destination expenses</h2>
             <p className="text-xs text-muted-foreground">
-              Approximate development estimates, not live quotes. Currency: INR.
+              Partial destination estimate, not the complete cost of travelling or live hotel and
+              meal quotes. Currency: INR.
             </p>
+            {itinerary.budget_estimate.unknown_attraction_fee_count > 0 ? (
+              <p className="text-xs font-medium text-amber-700">
+                {itinerary.budget_estimate.unknown_attraction_fee_count} scheduled attraction fee(s)
+                are unknown. Their internal zero-cost placeholders do not mean entry is free.
+              </p>
+            ) : null}
           </div>
           <div className="grid gap-3 sm:grid-cols-4">
             <Summary
-              label="Estimated total"
+              label="Estimated destination expenses"
               value={`₹${itinerary.budget_estimate.total_estimated.toLocaleString("en-IN")}`}
             />
             <Summary
@@ -636,8 +677,8 @@ function TripDetailsPage() {
               label="Budget status"
               value={
                 itinerary.budget_estimate.within_budget
-                  ? `Within estimate · ${Math.round((itinerary.budget_estimate.total_estimated / itinerary.budget_estimate.budget_limit) * 100)}% used`
-                  : `Over estimate · ${Math.round((itinerary.budget_estimate.total_estimated / itinerary.budget_estimate.budget_limit) * 100)}% used`
+                  ? `Listed estimates below budget · ${Math.round((itinerary.budget_estimate.total_estimated / itinerary.budget_estimate.budget_limit) * 100)}%`
+                  : `Listed estimates above budget · ${Math.round((itinerary.budget_estimate.total_estimated / itinerary.budget_estimate.budget_limit) * 100)}%`
               }
             />
           </div>
@@ -662,11 +703,16 @@ function TripDetailsPage() {
               </details>
             ))}
           </div>
-          {itinerary.budget_estimate.exclusions.map((item) => (
-            <p key={item} className="text-xs text-muted-foreground">
-              {item}
-            </p>
-          ))}
+          <div
+            className="space-y-1 rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground"
+            role="note"
+            aria-label="Budget exclusions"
+          >
+            <p className="font-medium text-foreground">Excluded costs and estimate limits</p>
+            {itinerary.budget_estimate.exclusions.map((item) => (
+              <p key={item}>{item}</p>
+            ))}
+          </div>
         </section>
       ) : null}
 

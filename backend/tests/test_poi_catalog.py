@@ -55,6 +55,18 @@ def test_normalizes_osm_categories_and_keeps_unknown_planning_values_unknown():
     assert row["external_provider_id"] == "node/1"
 
 
+def test_unparseable_hours_use_an_assumed_day_window_without_claiming_known_hours():
+    row = normalize_osm_element(
+        element(8, tags={"tourism": "attraction", "opening_hours": "sunrise-sunset"}),
+        "jaipur",
+    )
+    assert row is not None
+    adapted = to_optimizer_attraction(Attraction(**row))
+    assert adapted["opening_minute"] == 540
+    assert adapted["closing_minute"] == 1140
+    assert adapted["opening_window_known"] is False
+
+
 def test_parser_rejects_bad_coordinates_and_collapses_nearby_duplicate_names():
     payload = {"elements": [
         element(1, tags={"tourism": "attraction"}),

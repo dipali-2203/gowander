@@ -1,4 +1,4 @@
-from app.schemas import AttractionInput, Preferences
+from app.schemas import AttractionInput, ItineraryResponse, ParetoResponse, Preferences
 from app.services.nsga2 import generate_nsga2_alternatives
 from app.services.routing import build_travel_time_matrix
 
@@ -20,3 +20,16 @@ def test_nsga2_returns_reproducible_feasible_alternatives():
     assert all(item["itinerary"]["feasible"] for item in alternatives)
     assert all("utility" in item["objectives"] for item in alternatives)
     assert all(item["itinerary"]["risk_score"] is None for item in alternatives)
+
+
+def test_pareto_and_annealing_response_schemas_expose_single_day_scope():
+    pareto = ParetoResponse(
+        trip_id=1, algorithm="nsga2", seed=2, objective_note="test", alternatives=[]
+    )
+    annealing = ItineraryResponse(
+        trip_id=1, algorithm="simulated_annealing", optimization_scope="single_day",
+        stops=[], total_cost=0, total_travel_minutes=0, total_visit_minutes=0,
+        satisfaction=0, risk_score=None, feasible=False, warnings=[],
+    )
+    assert pareto.optimization_scope == "single_day"
+    assert annealing.optimization_scope == "single_day"

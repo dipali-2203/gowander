@@ -34,18 +34,19 @@ def make_attraction(
     )
 
 
-def test_duplicate_attraction_ids_are_rejected():
+def test_duplicate_attraction_ids_are_selected_once():
     attraction = make_attraction("museum")
-
-    with pytest.raises(ValueError, match="unique"):
-        generate_greedy_itinerary(
-            attractions=[attraction, attraction],
-            preferences=Preferences(),
-            start_latitude=17.385,
-            start_longitude=78.4867,
-            budget=1000,
-            available_minutes=240,
-        )
+    attraction.opening_minute = 0
+    attraction.closing_minute = 240
+    result = generate_greedy_itinerary(
+        attractions=[attraction, attraction],
+        preferences=Preferences(),
+        start_latitude=17.385,
+        start_longitude=78.4867,
+        budget=1000,
+        available_minutes=240,
+    )
+    assert len(result["stops"]) == 1
 
 
 def test_no_feasible_attractions_returns_warning():
@@ -143,6 +144,7 @@ def test_planner_respects_budget():
 def test_planner_respects_opening_hours():
     attraction = make_attraction("late-opening")
     attraction.opening_minute = 120
+    attraction.opening_window_known = True
 
     result = generate_greedy_itinerary(
         attractions=[attraction],
@@ -155,6 +157,68 @@ def test_planner_respects_opening_hours():
 
     assert result["stops"][0].arrival_minute >= 120
     assert result["feasible"] is True
+    assert result["stops"][0].wait_reason == "Waiting for verified opening time (opens at 02:00)."
+
+
+def test_unknown_opening_hours_do_not_create_wait_for_assumed_start_time():
+    attraction = make_attraction("unknown-hours")
+    attraction.opening_minute = 540
+    attraction.closing_minute = 1140
+    attraction.opening_window_known = False
+    result = generate_greedy_itinerary(
+        [attraction], Preferences(), 17.385, 78.4867, 500, 1140, start_minute=540
+    )
+    assert result["stops"]
+    assert result["stops"][0].wait_minutes == 0
+    assert result["stops"][0].wait_reason is None
+
+
+def test_long_verified_wait_is_kept_when_it_is_the_only_feasible_stop():
+    attraction = make_attraction("late-only")
+    attraction.opening_minute = 780
+    attraction.closing_minute = 1140
+    attraction.opening_window_known = True
+    result = generate_greedy_itinerary(
+        [attraction], Preferences(), 17.385, 78.4867, 500, 1140, start_minute=540
+    )
+    assert result["stops"][0].wait_minutes >= 45
+    assert "verified opening time" in result["stops"][0].wait_reason
+
+
+def test_avoidable_long_wait_is_skipped_for_a_feasible_open_attraction():
+    late = make_attraction("late")
+    late.name = "Late museum"
+    late.preference_score = 1.0
+    late.opening_minute = 900
+    late.closing_minute = 1140
+    late.opening_window_known = True
+    open_now = make_attraction("open")
+    open_now.name = "Open museum"
+    open_now.preference_score = 0.7
+    open_now.opening_minute = 540
+    open_now.closing_minute = 1140
+    open_now.opening_window_known = True
+    result = generate_greedy_itinerary(
+        [late, open_now], Preferences(), 17.385, 78.4867, 500, 1140, start_minute=540
+    )
+    assert result["stops"][0].attraction_id == "open"
+    assert result["stops"][0].wait_minutes == 0
+
+
+def test_one_day_jaipur_plan_obeys_the_assumed_nine_to_seven_window():
+    attraction = AttractionInput(
+        id="jaipur-amber", name="Amber Fort", category="history",
+        latitude=26.9855, longitude=75.8513, visit_minutes=120,
+        preference_score=0.9, opening_minute=540, closing_minute=1140,
+        opening_window_known=False, data_source="osm",
+    )
+    result = generate_greedy_itinerary(
+        [attraction], Preferences(), 26.9124, 75.7873, 1000, 1140, start_minute=540
+    )
+    assert result["stops"]
+    assert result["stops"][0].arrival_minute >= 540
+    assert result["stops"][-1].departure_minute <= 1140
+    assert result["stops"][0].wait_minutes == 0
 
 
 def test_itinerary_can_use_explicit_nine_to_seven_planning_window():

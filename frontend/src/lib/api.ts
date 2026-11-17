@@ -67,6 +67,7 @@ export type GeneratedItinerary = {
       departure_minute: number;
       travel_minutes_before: number;
       wait_minutes: number;
+      wait_reason?: string | null;
       cost: number;
       preference_score: number;
       risk_score: number | null;
@@ -112,6 +113,7 @@ export type TripBudgetEstimate = {
 export type ParetoAlternative = {
   objectives: { cost: number; time_proxy_minutes: number; risk_proxy: number; utility: number };
   itinerary: {
+    optimization_scope?: "single_day";
     total_cost: number;
     total_travel_minutes: number;
     satisfaction: number;
@@ -128,6 +130,7 @@ export type PlanningResult = {
   startLocation: [number, number];
   budget: number;
   annealing: {
+    optimization_scope?: "single_day";
     total_cost: number;
     total_travel_minutes: number;
     satisfaction: number;
@@ -214,6 +217,7 @@ export type AccountTrip = {
   optimization_results: {
     pareto?: ParetoAlternative[];
     simulated_annealing?: {
+      optimization_scope?: "single_day";
       total_cost: number;
       total_travel_minutes: number;
       satisfaction: number;

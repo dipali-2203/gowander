@@ -12,6 +12,7 @@ from app.schemas import AttractionInput, Preferences
 from app.services.planner import optimizer_risk_proxy, generate_greedy_itinerary
 from app.services.routing import TravelMatrix
 from app.services.attraction_relevance import balanced_interest_utility
+from app.services.itinerary_candidates import deduplicate_itinerary_candidates, remap_matrix_for_candidates
 
 
 class AttractionSelectionProblem(ElementwiseProblem):
@@ -51,6 +52,11 @@ def generate_nsga2_alternatives(
     start_minute: int = 0,
 ) -> list[dict]:
     """Generate a small, deterministic Pareto set and decode it with greedy routing."""
+    original_attractions = attractions
+    attractions, duplicate_warnings = deduplicate_itinerary_candidates(attractions)
+    travel_matrix = remap_matrix_for_candidates(travel_matrix, original_attractions, attractions)
+    if not attractions:
+        return []
     problem = AttractionSelectionProblem(attractions, preferences, travel_matrix, budget, available_minutes)
     result = minimize(
         problem,
@@ -78,6 +84,7 @@ def generate_nsga2_alternatives(
             start_minute=start_minute,
         )
         if decoded["feasible"]:
+            decoded["warnings"] = list(dict.fromkeys([*duplicate_warnings, *decoded["warnings"]]))
             alternatives.append({"itinerary": decoded, "objectives": {
                 "cost": round(float(objective[0]), 2), "time_proxy_minutes": round(float(objective[1]), 2),
                 "risk_proxy": round(float(objective[2]), 4), "utility": round(float(-objective[3]), 4),

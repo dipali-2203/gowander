@@ -250,11 +250,13 @@ class ItineraryStop(BaseModel):
     risk_score: float | None
     risk_data_status: Literal["verified", "assumed", "partial", "unavailable", "not_applicable"] = "unavailable"
     wait_minutes: int = 0
+    wait_reason: str | None = None
 
 
 class ItineraryResponse(BaseModel):
     trip_id: int
     algorithm: str
+    optimization_scope: Literal["single_day"] | None = None
     stops: list[ItineraryStop]
     total_cost: float
     total_travel_minutes: int
@@ -320,6 +322,7 @@ class ParetoAlternative(BaseModel):
 class ParetoResponse(BaseModel):
     trip_id: int
     algorithm: Literal["nsga2"]
+    optimization_scope: Literal["single_day"] = "single_day"
     seed: int
     objective_note: str
     alternatives: list[ParetoAlternative]

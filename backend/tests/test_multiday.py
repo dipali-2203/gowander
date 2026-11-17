@@ -108,6 +108,7 @@ def test_meal_break_is_returned_and_reserved_between_activities():
     day = result["days"][0]
     assert day["meal_breaks"] == [MealBreak(start_minute=60, duration_minutes=30)]
     assert day["stops"][1].arrival_minute >= 90
+    assert "meal or rest break" in day["stops"][1].wait_reason
 
 
 def test_catalog_larger_than_trip_capacity_is_reported():
@@ -129,3 +130,32 @@ def test_catalog_larger_than_trip_capacity_is_reported():
 
     assert result["feasible"] is True
     assert "remain unscheduled" in result["warnings"][0]
+
+
+def test_three_day_udaipur_regression_uses_unknown_hours_as_assumptions():
+    attractions = [
+        AttractionInput(
+            id=f"udaipur-{index}", name=name, category=category, catalog_category=category,
+            latitude=latitude, longitude=longitude, cost=0, visit_minutes=60,
+            preference_score=0.8, data_source="osm", opening_minute=540,
+            closing_minute=1140, opening_window_known=False, visit_duration_known=False,
+        )
+        for index, (name, category, latitude, longitude) in enumerate([
+            ("City Palace", "museum", 24.5764, 73.6835),
+            ("Bagore ki Haveli", "historical", 24.5791, 73.6806),
+            ("Saheliyon ki Bari", "park", 24.6017, 73.6957),
+        ])
+    ]
+    result = generate_multiday_greedy(
+        attractions=attractions, preferences=Preferences(),
+        start_date=date(2026, 12, 1), end_date=date(2026, 12, 3),
+        start_latitude=24.5854, start_longitude=73.7125, budget=5000,
+        available_minutes_per_day=1140,
+        meal_breaks=[MealBreak(start_minute=780, duration_minutes=60)],
+        confirmed_activities=[], routing_provider="haversine",
+    )
+    stops = [stop for day in result["days"] for stop in day["stops"]]
+    assert len(stops) == 3
+    assert len({stop.attraction_id for stop in stops}) == 3
+    assert all(stop.wait_minutes == 0 for stop in stops)
+    assert all(day["meal_breaks"] for day in result["days"])

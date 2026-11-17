@@ -147,10 +147,11 @@ def estimate_trip_budget(
         "unknown_attraction_fee_count": unknown_attraction_fees,
         "categories": categories,
         "exclusions": [
-            "Attraction fees use supplied catalog values; omitted fee fields may default to ₹0 and should be verified.",
-            "Intercity travel to and from the destination is not priced because no route or fare provider is configured.",
-            "No specific hotel, restaurant, availability, rating, or menu price is claimed.",
-            "Transport estimates cover local planned legs and do not include parking or return travel to lodging.",
+            "Intercity outbound and return travel are excluded because no route or fare provider is configured.",
+            "Hotel amounts are configurable allowances, not actual booking prices or availability.",
+            "Meal amounts are configurable allowances; actual restaurant and menu prices are unavailable.",
+            "Unknown attraction fees use an internal zero-cost optimizer placeholder; this does not mean entry is free.",
+            "Parking, travel to or from lodging, and other unconfigured expenses may be excluded.",
         ],
         "last_updated": None,
     }

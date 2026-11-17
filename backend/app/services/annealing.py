@@ -6,9 +6,16 @@ from random import Random
 from app.schemas import AttractionInput, Preferences
 from app.services.planner import optimizer_risk_proxy, generate_greedy_itinerary
 from app.services.attraction_relevance import balanced_interest_utility
+from app.services.itinerary_candidates import deduplicate_itinerary_candidates
 
 
 def generate_annealed_itinerary(attractions: list[AttractionInput], preferences: Preferences, start_latitude: float, start_longitude: float, budget: float, available_minutes: int, seed: int = 42, start_minute: int = 0) -> dict:
+    attractions, duplicate_warnings = deduplicate_itinerary_candidates(attractions)
+    if not attractions:
+        return generate_greedy_itinerary(
+            [], preferences, start_latitude, start_longitude, budget, available_minutes,
+            start_minute=start_minute,
+        )
     random = Random(seed)
     current = [True] * len(attractions)
 
@@ -34,4 +41,6 @@ def generate_annealed_itinerary(attractions: list[AttractionInput], preferences:
         if current_score > best_score:
             best, best_score = current[:], current_score
     selected = [item for item, active in zip(attractions, best) if active]
-    return generate_greedy_itinerary(selected, preferences, start_latitude, start_longitude, budget, available_minutes, start_minute=start_minute)
+    result = generate_greedy_itinerary(selected, preferences, start_latitude, start_longitude, budget, available_minutes, start_minute=start_minute)
+    result["warnings"] = list(dict.fromkeys([*duplicate_warnings, *result["warnings"]]))
+    return result
