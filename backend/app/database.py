@@ -158,6 +158,12 @@ def migrate_attraction_catalog_schema() -> None:
         "last_verified_at": datetime_type,
         "data_freshness": "VARCHAR(20) NOT NULL DEFAULT 'unknown'",
         "verification_status": "VARCHAR(30) NOT NULL DEFAULT 'unverified'",
+        # Existing numeric defaults cannot be distinguished from observations.
+        # Keep the values intact and mark their provenance as unavailable.
+        "weather_risk_known": "BOOLEAN NOT NULL DEFAULT FALSE",
+        "crowd_risk_known": "BOOLEAN NOT NULL DEFAULT FALSE",
+        "availability_risk_known": "BOOLEAN NOT NULL DEFAULT FALSE",
+        "risk_metadata": "JSON NOT NULL DEFAULT '{}'",
         "data_confidence": "FLOAT",
         "raw_tags": "JSON NOT NULL DEFAULT '{}'",
         "opening_hours": "VARCHAR(500)",

@@ -9,7 +9,7 @@ from pymoo.operators.sampling.rnd import BinaryRandomSampling
 from pymoo.optimize import minimize
 
 from app.schemas import AttractionInput, Preferences
-from app.services.planner import calculate_attraction_risk, generate_greedy_itinerary
+from app.services.planner import optimizer_risk_proxy, generate_greedy_itinerary
 from app.services.routing import TravelMatrix
 
 
@@ -35,7 +35,7 @@ class AttractionSelectionProblem(ElementwiseProblem):
         )
         survival = 1.0
         for attraction in chosen:
-            survival *= 1.0 - calculate_attraction_risk(attraction)
+            survival *= 1.0 - optimizer_risk_proxy(attraction)
         risk = 1.0 - survival
         utility = sum(a.preference_score * self.preferences.interests.get(a.category.lower(), 0.5) for a in chosen)
         out["F"] = [cost, travel + visit_time, risk, -utility]

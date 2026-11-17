@@ -8,7 +8,9 @@ from sqlalchemy.pool import StaticPool
 
 from app.api.auth import get_current_user
 from app.database import Base, get_db
+import app.database as database_module
 from app.main import app
+from app.api.trips import _serialize_legacy_risk
 from app.models import Attraction
 from app.schemas import AttractionInput, Preferences
 from app.services.planner import generate_greedy_itinerary
@@ -170,6 +172,9 @@ def test_catalog_endpoint_labels_synthetic_fallback_and_returns_db_provenance(ap
     assert attraction["opening_hours"] is None
     assert attraction["visit_duration_known"] is False
     assert attraction["provider_name"] == "openstreetmap"
+    assert attraction["weather_risk_known"] is False
+    assert attraction["crowd_risk_known"] is False
+    assert attraction["availability_risk_known"] is False
 
 
 def test_ingestion_endpoint_rejects_ordinary_authenticated_user(api_client):
@@ -179,4 +184,63 @@ def test_ingestion_endpoint_rejects_ordinary_authenticated_user(api_client):
     })
     assert signup.status_code == 201
     assert client.post("/api/v1/attractions/admin/ingest/jaipur", headers={"Origin": "http://localhost:3000"}).status_code == 403
+
+
+def test_risk_endpoints_serialize_unknown_values_as_unavailable(api_client):
+    client, _ = api_client
+    headers = {"Origin": "http://localhost:3000"}
+    assert client.post("/api/v1/auth/signup", headers=headers, json={
+        "name": "Risk User", "email": "risk-user@example.com", "password": "a-long-password-123",
+    }).status_code == 201
+    trip_response = client.post("/api/v1/trips", headers=headers, json={
+        "destination": "Jaipur", "start_date": "2026-12-01", "end_date": "2026-12-01",
+        "budget": 5000, "start_latitude": 26.91, "start_longitude": 75.78,
+    })
+    trip_id = trip_response.json()["id"]
+    attraction = {"id": "osm:unknown", "name": "Unknown POI", "category": "history",
+                  "latitude": 26.92, "longitude": 75.82, "visit_minutes": 45,
+                  "preference_score": 0.5, "data_source": "osm"}
+    conditions = client.post(f"/api/v1/trips/{trip_id}/conditions", headers=headers,
+                             json={"attractions": [attraction]})
+    assert conditions.status_code == 200
+    assert conditions.json()["conditions"][0]["weather_risk"] is None
+    simulation = client.post(f"/api/v1/trips/{trip_id}/risk-simulation", headers=headers,
+                             json={"attractions": [attraction], "scenarios": 100})
+    assert simulation.status_code == 200
+    assert simulation.json()["completion_probability"] is None
+    assert simulation.json()["risk_data_status"] == "unavailable"
+
+
+def test_legacy_saved_risk_snapshot_is_serialized_as_unknown_without_mutation():
+    stored = {"risk_score": 0.0, "stops": [{"risk_score": 0.0}],
+              "alternatives": [{"objectives": {"risk_proxy": 0.0}}]}
+    serialized = _serialize_legacy_risk(stored)
+    assert stored["risk_score"] == 0.0
+    assert serialized["risk_score"] is None
+    assert serialized["risk_data_status"] == "unavailable"
+    assert serialized["stops"][0]["risk_score"] is None
+    assert serialized["alternatives"][0]["risk_data_status"] == "unavailable"
+
+
+def test_risk_schema_migration_preserves_legacy_values_and_marks_unknown(monkeypatch):
+    engine = create_engine("sqlite://")
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "CREATE TABLE attractions (id VARCHAR(100) PRIMARY KEY, weather_risk FLOAT, crowd_risk FLOAT, availability_risk FLOAT)"
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO attractions VALUES ('legacy', 0.25, 0.0, 0.1)"
+        )
+    monkeypatch.setattr(database_module, "engine", engine)
+    try:
+        database_module.migrate_attraction_catalog_schema()
+        with engine.connect() as connection:
+            row = connection.exec_driver_sql(
+                "SELECT weather_risk, crowd_risk, availability_risk, weather_risk_known, crowd_risk_known, availability_risk_known, risk_metadata FROM attractions WHERE id='legacy'"
+            ).one()
+        assert tuple(row[:3]) == (0.25, 0.0, 0.1)
+        assert tuple(row[3:6]) == (0, 0, 0)
+        assert row[6] == "{}"
+    finally:
+        engine.dispose()
 

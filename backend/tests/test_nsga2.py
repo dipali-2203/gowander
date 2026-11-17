@@ -19,3 +19,4 @@ def test_nsga2_returns_reproducible_feasible_alternatives():
     assert alternatives
     assert all(item["itinerary"]["feasible"] for item in alternatives)
     assert all("utility" in item["objectives"] for item in alternatives)
+    assert all(item["itinerary"]["risk_score"] is None for item in alternatives)

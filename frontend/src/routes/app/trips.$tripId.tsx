@@ -4,6 +4,7 @@ import { ArrowLeft, Copy, Pencil, RefreshCw, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/travel/PageHeader";
 import { Button } from "@/components/ui/button";
+import { riskAssessmentLabel, riskProxyLabel } from "@/lib/risk-display.js";
 import {
   deleteTrip,
   duplicateTrip,
@@ -226,7 +227,8 @@ function TripDetailsPage() {
             departure_minute: number;
             travel_minutes_before: number;
             cost: number;
-            risk_score: number;
+            risk_score: number | null;
+            risk_data_status?: string;
           }>;
           meal_breaks: Array<{ start_minute: number; duration_minutes: number }>;
           total_cost: number;
@@ -468,7 +470,7 @@ function TripDetailsPage() {
           label="Plan risk estimate"
           value={
             trip.latest_itinerary
-              ? `${Math.round(trip.latest_itinerary.risk_score * 100)}% · ${trip.latest_itinerary.data_source}`
+              ? `${riskAssessmentLabel(trip.latest_itinerary.risk_score, trip.latest_itinerary.risk_data_status)} · ${trip.latest_itinerary.data_source}`
               : "Unavailable"
           }
         />
@@ -490,8 +492,8 @@ function TripDetailsPage() {
               <p className="mt-1 text-muted-foreground">
                 ₹{alternative.objectives.cost.toLocaleString("en-IN")} ·{" "}
                 {Math.round(alternative.objectives.time_proxy_minutes)} min proxy ·{" "}
-                {Math.round(alternative.objectives.risk_proxy * 100)}% risk proxy · utility{" "}
-                {alternative.objectives.utility.toFixed(2)}
+                {riskProxyLabel(alternative.objectives.risk_proxy, alternative.risk_data_status)} ·
+                utility {alternative.objectives.utility.toFixed(2)}
               </p>
             </div>
           ))}
@@ -531,9 +533,7 @@ function TripDetailsPage() {
                       <p className="text-xs text-muted-foreground">
                         {stop.travel_minutes_before} min estimated travel · ₹
                         {stop.cost.toLocaleString("en-IN")} attraction fee ·{" "}
-                        {stop.risk_score === null
-                          ? "Risk estimate unavailable"
-                          : `${Math.round(stop.risk_score * 100)}% estimated risk`}
+                        {riskAssessmentLabel(stop.risk_score, stop.risk_data_status)}
                       </p>
                     </li>
                   ))}

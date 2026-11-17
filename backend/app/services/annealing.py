@@ -4,7 +4,7 @@ from math import exp
 from random import Random
 
 from app.schemas import AttractionInput, Preferences
-from app.services.planner import calculate_attraction_risk, generate_greedy_itinerary
+from app.services.planner import optimizer_risk_proxy, generate_greedy_itinerary
 
 
 def generate_annealed_itinerary(attractions: list[AttractionInput], preferences: Preferences, start_latitude: float, start_longitude: float, budget: float, available_minutes: int, seed: int = 42) -> dict:
@@ -16,7 +16,7 @@ def generate_annealed_itinerary(attractions: list[AttractionInput], preferences:
         utility = sum(item.preference_score * preferences.interests.get(item.category.lower(), 0.5) for item in chosen)
         cost = sum(item.cost for item in chosen)
         duration = sum(item.visit_minutes for item in chosen)
-        risk = sum(calculate_attraction_risk(item) for item in chosen)
+        risk = sum(optimizer_risk_proxy(item) for item in chosen)
         return utility - max(0, cost - budget) / max(budget, 1) - max(0, duration - available_minutes) / max(available_minutes, 1) - risk * (1 - preferences.risk_tolerance)
 
     current_score = score(current)

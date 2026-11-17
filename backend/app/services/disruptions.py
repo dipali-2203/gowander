@@ -25,7 +25,13 @@ def apply_disruptions(
                 if item is None:
                     continue
                 field = "weather_risk" if disruption.kind == "rainfall" else "crowd_risk"
-                updated[attraction_id] = item.model_copy(update={field: min(1.0, getattr(item, field) + disruption.severity)})
+                key = "weather" if field == "weather_risk" else "crowd"
+                metadata = {**item.risk_metadata, key: {"source": "scenario", "observed_at": None, "verified": False, "assumption": f"scenario severity {disruption.severity:.2f}"}}
+                updated[attraction_id] = item.model_copy(update={
+                    field: min(1.0, getattr(item, field) + disruption.severity),
+                    f"{field}_known": True,
+                    "risk_metadata": metadata,
+                })
         applied.append(f"{disruption.kind} (severity {disruption.severity:.2f})")
     adjusted = [[None if value is None else ceil(value * traffic_multiplier) for value in row] for row in matrix]
     return list(updated.values()), adjusted, closed, applied

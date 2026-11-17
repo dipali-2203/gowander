@@ -83,6 +83,8 @@ def test_multi_day_baseline_distributes_feasible_attractions(days):
     assert len({stop.attraction_id for day in result["days"] for stop in day["stops"]}) == days * 2
     assert result["total_cost"] == days * 200
     assert result["feasible"] is True
+    assert result["risk_score"] is None
+    assert result["risk_data_status"] == "unavailable"
 
 
 def test_meal_break_is_returned_and_reserved_between_activities():

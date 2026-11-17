@@ -125,6 +125,10 @@ class AttractionInput(BaseModel):
     weather_risk: float = Field(default=0.0, ge=0, le=1)
     crowd_risk: float = Field(default=0.0, ge=0, le=1)
     availability_risk: float = Field(default=0.0, ge=0, le=1)
+    weather_risk_known: bool | None = None
+    crowd_risk_known: bool | None = None
+    availability_risk_known: bool | None = None
+    risk_metadata: dict[str, dict] = Field(default_factory=dict)
     fatigue_score: float = Field(default=0.5, ge=0, le=1)
     opening_minute: int = Field(default=540, ge=0, le=1439)
     closing_minute: int = Field(default=1020, ge=1, le=1440)
@@ -151,6 +155,17 @@ class AttractionInput(BaseModel):
     def validate_opening_window(self):
         if self.closing_minute <= self.opening_minute:
             raise ValueError("closing_minute must be after opening_minute")
+        return self
+
+    @model_validator(mode="after")
+    def resolve_risk_availability(self):
+        # Legacy callers that explicitly supplied a risk number retain their
+        # previous semantics; omitted values and all unflagged OSM values stay unknown.
+        for field in ("weather_risk", "crowd_risk", "availability_risk"):
+            known_field = f"{field}_known"
+            if getattr(self, known_field) is None:
+                inferred = field in self.model_fields_set and self.data_source != "osm"
+                setattr(self, known_field, inferred)
         return self
 
 
@@ -228,7 +243,8 @@ class ItineraryStop(BaseModel):
     travel_minutes_before: int
     cost: float
     preference_score: float
-    risk_score: float
+    risk_score: float | None
+    risk_data_status: Literal["verified", "assumed", "partial", "unavailable", "not_applicable"] = "unavailable"
     wait_minutes: int = 0
 
 
@@ -240,7 +256,8 @@ class ItineraryResponse(BaseModel):
     total_travel_minutes: int
     total_visit_minutes: int
     satisfaction: float
-    risk_score: float
+    risk_score: float | None
+    risk_data_status: Literal["verified", "assumed", "partial", "unavailable", "not_applicable"] = "unavailable"
     feasible: bool
     warnings: list[str]
     data_source: Literal["synthetic", "user_supplied", "osm"] = "user_supplied"
@@ -282,7 +299,8 @@ class MultiDayItineraryResponse(BaseModel):
     total_travel_minutes: int
     total_visit_minutes: int
     satisfaction: float
-    risk_score: float
+    risk_score: float | None
+    risk_data_status: Literal["verified", "assumed", "partial", "unavailable", "not_applicable"] = "unavailable"
     feasible: bool
     warnings: list[str]
     data_source: Literal["synthetic", "user_supplied", "osm"]
@@ -292,6 +310,7 @@ class MultiDayItineraryResponse(BaseModel):
 class ParetoAlternative(BaseModel):
     itinerary: ItineraryResponse
     objectives: dict[str, float]
+    risk_data_status: Literal["verified", "assumed", "partial", "unavailable", "not_applicable"] = "unavailable"
 
 
 class ParetoResponse(BaseModel):
@@ -306,8 +325,9 @@ class RiskSimulationResponse(BaseModel):
     trip_id: int
     scenarios: int
     seed: int
-    completion_probability: float
-    expected_disruptions: float
+    completion_probability: float | None
+    expected_disruptions: float | None
+    risk_data_status: Literal["verified", "assumed", "partial", "unavailable"] = "unavailable"
     assumption: str
 
 
@@ -317,9 +337,14 @@ class ConditionsRequest(BaseModel):
 
 class AttractionCondition(BaseModel):
     attraction_id: str
-    weather_risk: float
-    crowd_risk: float
-    availability_risk: float
+    weather_risk: float | None
+    crowd_risk: float | None
+    availability_risk: float | None
+    weather_risk_known: bool = False
+    crowd_risk_known: bool = False
+    availability_risk_known: bool = False
+    risk_data_status: Literal["verified", "assumed", "partial", "unavailable"] = "unavailable"
+    risk_metadata: dict[str, dict] = Field(default_factory=dict)
 
 
 class ConditionsResponse(BaseModel):

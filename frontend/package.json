@@ -8,6 +8,7 @@
     "build": "vite build",
     "start": "node .output/server/index.mjs",
     "build:dev": "vite build --mode development",
+    "test:risk": "node --test tests/risk-display.test.mjs",
     "preview": "vite preview",
     "lint": "eslint .",
     "format": "prettier --write ."

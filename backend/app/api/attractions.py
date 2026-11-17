@@ -91,6 +91,10 @@ class AttractionCreate(BaseModel):
     weather_risk: float = Field(default=0, ge=0, le=1)
     crowd_risk: float = Field(default=0, ge=0, le=1)
     availability_risk: float = Field(default=0, ge=0, le=1)
+    weather_risk_known: bool = False
+    crowd_risk_known: bool = False
+    availability_risk_known: bool = False
+    risk_metadata: dict[str, dict] = Field(default_factory=dict)
     opening_minute: int = Field(default=540, ge=0, le=1439)
     closing_minute: int = Field(default=1020, ge=1, le=1440)
     data_source: str = Field(default="user_supplied", max_length=30)

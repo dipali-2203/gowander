@@ -3,7 +3,7 @@
 from datetime import timedelta
 
 from app.schemas import AttractionInput, ConfirmedActivity, ItineraryStop, MealBreak, Preferences
-from app.services.planner import calculate_attraction_risk, generate_greedy_itinerary
+from app.services.planner import calculate_attraction_risk, generate_greedy_itinerary, risk_data_status
 from app.services.routing import estimate_minutes, build_travel_time_matrix
 
 
@@ -70,6 +70,7 @@ def generate_multiday_greedy(
                 travel_minutes_before=travel_before, wait_minutes=0, cost=attraction.cost,
                 preference_score=attraction.preference_score,
                 risk_score=calculate_attraction_risk(attraction),
+                risk_data_status=risk_data_status([attraction]),
             ))
             fixed_cost += attraction.cost
             previous_departure = max(previous_departure, departure)
@@ -137,7 +138,9 @@ def generate_multiday_greedy(
             "total_visit_minutes": result["total_visit_minutes"],
             "reserved_break_minutes": break_minutes,
             "meal_breaks": meal_breaks,
-            "feasible": result["feasible"] and not missing_required and not result["warnings"],
+            "feasible": result["feasible"] and not missing_required and not any(
+                "Risk data is incomplete" not in warning for warning in result["warnings"]
+            ),
             "warnings": day_warnings,
         })
         remaining_budget -= result["total_cost"]
@@ -153,15 +156,24 @@ def generate_multiday_greedy(
     total_cost = sum(day["total_cost"] for day in days)
     stop_list = [stop for day in days for stop in day["stops"]]
     survival = 1.0
+    risk_complete = True
     for stop in stop_list:
-        survival *= 1 - stop.risk_score
+        if stop.risk_score is None:
+            risk_complete = False
+        else:
+            survival *= 1 - stop.risk_score
+    if stop_list and not risk_complete:
+        warnings.append("Risk data is incomplete. The optimizer used a known-components-only proxy; this is not a verified safety assessment.")
     return {
         "days": days,
         "total_cost": round(total_cost, 2),
         "total_travel_minutes": sum(day["total_travel_minutes"] for day in days),
         "total_visit_minutes": sum(day["total_visit_minutes"] for day in days),
         "satisfaction": round(sum(stop.preference_score for stop in stop_list) / len(stop_list), 3) if stop_list else 0.0,
-        "risk_score": round(1 - survival, 3),
-        "feasible": all(day["feasible"] for day in days) and not warnings,
+        "risk_score": round(1 - survival, 3) if stop_list and risk_complete else None,
+        "risk_data_status": risk_data_status([item for item in attractions if item.id in {stop.attraction_id for stop in stop_list}]),
+        "feasible": all(day["feasible"] for day in days) and not any(
+            "Risk data is incomplete" not in warning for warning in warnings
+        ),
         "warnings": warnings,
     }

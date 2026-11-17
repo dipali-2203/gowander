@@ -52,22 +52,47 @@ def estimate_travel_minutes(
 
 def calculate_attraction_risk(
     attraction: AttractionInput,
-) -> float:
+) -> float | None:
     """
     Baseline probability of at least one disruption.
     Assumes independent weather, crowd, and availability risks.
     """
-    risks = [
-        attraction.weather_risk,
-        attraction.crowd_risk,
-        attraction.availability_risk,
-    ]
+    fields = (("weather_risk", attraction.weather_risk_known), ("crowd_risk", attraction.crowd_risk_known), ("availability_risk", attraction.availability_risk_known))
+    risks = [getattr(attraction, field) for field, known in fields if known]
+    if len(risks) != len(fields):
+        return None
 
     survival = 1.0
     for risk in risks:
         survival *= 1.0 - risk
 
     return 1.0 - survival
+
+
+def optimizer_risk_proxy(attraction: AttractionInput) -> float:
+    """Known-components-only proxy; unknown dimensions contribute neutral 0 in legacy objectives."""
+    survival = 1.0
+    for field in ("weather_risk", "crowd_risk", "availability_risk"):
+        if getattr(attraction, f"{field}_known"):
+            survival *= 1.0 - getattr(attraction, field)
+    return 1.0 - survival
+
+
+def risk_data_status(attractions: list[AttractionInput]) -> str:
+    if not attractions:
+        return "not_applicable"
+    known = [getattr(item, f"{field}_known") for item in attractions for field in ("weather_risk", "crowd_risk", "availability_risk")]
+    if not any(known):
+        return "unavailable"
+    if not all(known):
+        return "partial"
+    return "verified" if all(
+        isinstance(item.risk_metadata.get(key), dict)
+        and item.risk_metadata[key].get("verified") is True
+        and item.risk_metadata[key].get("source")
+        and item.risk_metadata[key].get("observed_at")
+        for item in attractions for key in ("weather", "crowd", "availability")
+    ) else "assumed"
 
 
 def generate_greedy_itinerary(
@@ -172,11 +197,11 @@ def generate_greedy_itinerary(
                 attraction.preference_score * category_weight
             )
 
-            risk = calculate_attraction_risk(attraction)
+            risk = optimizer_risk_proxy(attraction)
 
             # Risk-averse travelers receive a stronger risk penalty.
             risk_penalty = 1.0 - preferences.risk_tolerance
-            crowd_penalty = attraction.crowd_risk * (1.0 - preferences.crowd_tolerance)
+            crowd_penalty = (attraction.crowd_risk if attraction.crowd_risk_known else 0.0) * (1.0 - preferences.crowd_tolerance)
             cost_penalty = (attraction.cost / max(budget, 1)) * preferences.budget_sensitivity
             fatigue_penalty = attraction.fatigue_score * (1.0 - preferences.walking_tolerance) * (1.0 - preferences.travel_pace)
 
@@ -227,7 +252,8 @@ def generate_greedy_itinerary(
                 travel_minutes_before=travel,
                 cost=selected.cost,
                 preference_score=selected.preference_score,
-                risk_score=risk,
+                risk_score=calculate_attraction_risk(selected),
+                risk_data_status=risk_data_status([selected]),
                 wait_minutes=wait,
             )
         )
@@ -252,9 +278,12 @@ def generate_greedy_itinerary(
     )
 
     trip_survival = 1.0
-
+    risk_complete = True
     for stop in stops:
-        trip_survival *= 1.0 - stop.risk_score
+        if stop.risk_score is None:
+            risk_complete = False
+        else:
+            trip_survival *= 1.0 - stop.risk_score
 
     warnings = []
 
@@ -262,7 +291,9 @@ def generate_greedy_itinerary(
         warnings.append(
             "No attractions fit the available budget and time."
         )
-    elif remaining:
+    if stops and not risk_complete:
+        warnings.append("Risk data is incomplete. The optimizer used a known-components-only proxy; this is not a verified safety assessment.")
+    if remaining:
         warnings.append(
             f"{len(remaining)} attractions were omitted because "
             "of budget or time constraints."
@@ -288,7 +319,8 @@ def generate_greedy_itinerary(
         "total_travel_minutes": total_travel,
         "total_visit_minutes": total_visit,
         "satisfaction": round(satisfaction, 3),
-        "risk_score": round(1.0 - trip_survival, 3),
+        "risk_score": round(1.0 - trip_survival, 3) if stops and risk_complete else None,
+        "risk_data_status": risk_data_status([next(a for a in attractions if a.id == stop.attraction_id) for stop in stops]),
         "feasible": feasible,
         "warnings": warnings,
     }

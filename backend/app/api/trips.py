@@ -29,7 +29,7 @@ from app.schemas import (
     ScenarioReplanRequest,
     ScenarioReplanResponse,
 )
-from app.services.planner import generate_greedy_itinerary
+from app.services.planner import generate_greedy_itinerary, risk_data_status
 from app.services.routing import build_travel_time_matrix
 from app.services.multiday import generate_multiday_greedy
 from app.services.nsga2 import generate_nsga2_alternatives
@@ -41,6 +41,22 @@ from app.services.annealing import generate_annealed_itinerary
 from app.services.budget import attraction_budget_after_fixed_costs, estimate_trip_budget
 
 router = APIRouter(prefix="/api/v1/trips", tags=["Trips"], dependencies=[Depends(require_trip_access)])
+
+
+def _serialize_legacy_risk(value):
+    """Treat pre-metadata stored risk numbers as unknown without rewriting snapshots."""
+    if isinstance(value, list):
+        return [_serialize_legacy_risk(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    result = {key: _serialize_legacy_risk(item) for key, item in value.items()}
+    if "risk_score" in result and "risk_data_status" not in result:
+        result["risk_score"] = None
+        result["risk_data_status"] = "unavailable"
+    objectives = result.get("objectives")
+    if isinstance(objectives, dict) and "risk_proxy" in objectives and "risk_data_status" not in result:
+        result["risk_data_status"] = "unavailable"
+    return result
 
 
 def _build_saved_multiday_plan(trip: Trip, request: MultiDayOptimizeRequest):
@@ -122,8 +138,8 @@ def list_trips(db: Session = Depends(get_db), user: User = Depends(get_current_u
             "budget": trip.budget,
             "preferences": trip.preferences,
             "planning_options": trip.planning_options,
-            "optimization_results": trip.optimization_results,
-            "latest_itinerary": trip.latest_itinerary,
+            "optimization_results": _serialize_legacy_risk(trip.optimization_results),
+            "latest_itinerary": _serialize_legacy_risk(trip.latest_itinerary),
             "created_at": trip.created_at.isoformat() if trip.created_at else None,
             "updated_at": trip.updated_at.isoformat() if trip.updated_at else None,
             "itinerary_stale": trip.itinerary_stale,
@@ -193,8 +209,8 @@ def get_trip(
         "preferences": trip.preferences,
         "planning_options": trip.planning_options,
         "planning_inputs": trip.planning_inputs,
-        "optimization_results": trip.optimization_results,
-        "latest_itinerary": trip.latest_itinerary,
+        "optimization_results": _serialize_legacy_risk(trip.optimization_results),
+        "latest_itinerary": _serialize_legacy_risk(trip.latest_itinerary),
         "created_at": trip.created_at.isoformat() if trip.created_at else None,
         "updated_at": trip.updated_at.isoformat() if trip.updated_at else None,
         "itinerary_stale": trip.itinerary_stale,
@@ -287,22 +303,21 @@ def record_preference_feedback(trip_id: int, request: PreferenceFeedbackRequest,
 def simulate_trip_risk(trip_id: int, request: RiskSimulationRequest, db: Session = Depends(get_db)):
     if db.get(Trip, trip_id) is None:
         raise HTTPException(status_code=404, detail="Trip not found")
-    completion, expected = simulate_completion_probability(
-        [
-            calculate_attraction_risk(
-                item.weather_risk,
-                item.crowd_risk,
-                item.availability_risk,
-            )
-            for item in request.attractions
-        ],
-        request.scenarios,
-        request.seed,
-    )
+    status = risk_data_status(request.attractions)
+    if status in {"unavailable", "partial"}:
+        completion = expected = None
+    else:
+        completion, expected = simulate_completion_probability(
+            [calculate_attraction_risk(item.weather_risk, item.crowd_risk, item.availability_risk)
+             for item in request.attractions], request.scenarios, request.seed,
+        )
     return RiskSimulationResponse(
         trip_id=trip_id, scenarios=request.scenarios, seed=request.seed,
-        completion_probability=round(completion, 4), expected_disruptions=round(expected, 4),
-        assumption="Independent Bernoulli disruptions from supplied weather, crowd, and availability risk estimates.",
+        completion_probability=round(completion, 4) if completion is not None else None,
+        expected_disruptions=round(expected, 4) if expected is not None else None,
+        risk_data_status=status,
+        assumption=("Independent Bernoulli disruptions from supplied weather, crowd, and availability risk estimates."
+                    if completion is not None else "Risk simulation unavailable because one or more required risk dimensions are unknown."),
     )
 
 
@@ -469,7 +484,7 @@ def generate_pareto_alternatives(trip_id: int, request: ParetoRequest, db: Sessi
     response = ParetoResponse(
         trip_id=trip.id, algorithm="nsga2", seed=request.seed,
         objective_note="Cost, travel-time, and risk values are planning proxies; decoded stops are validated by the greedy feasibility baseline.",
-        alternatives=[{"itinerary": {"trip_id": trip.id, "algorithm": "nsga2", **item["itinerary"]}, "objectives": item["objectives"]} for item in alternatives],
+        alternatives=[{"itinerary": {"trip_id": trip.id, "algorithm": "nsga2", **item["itinerary"]}, "objectives": item["objectives"], "risk_data_status": risk_data_status(request.attractions)} for item in alternatives],
     )
     trip.optimization_results = {
         **(trip.optimization_results or {}),
@@ -588,6 +603,10 @@ def optimize_saved_trip(
             weather_risk=a.weather_risk,
             crowd_risk=a.crowd_risk,
             availability_risk=a.availability_risk,
+            weather_risk_known=a.weather_risk_known,
+            crowd_risk_known=a.crowd_risk_known,
+            availability_risk_known=a.availability_risk_known,
+            risk_metadata=a.risk_metadata or {},
             fatigue_score=a.fatigue_score,
             opening_minute=a.opening_minute,
             closing_minute=a.closing_minute,
@@ -695,6 +714,10 @@ def replan_trip(
             weather_risk=a.weather_risk,
             crowd_risk=a.crowd_risk,
             availability_risk=a.availability_risk,
+            weather_risk_known=a.weather_risk_known,
+            crowd_risk_known=a.crowd_risk_known,
+            availability_risk_known=a.availability_risk_known,
+            risk_metadata=a.risk_metadata or {},
             fatigue_score=a.fatigue_score,
             opening_minute=a.opening_minute,
             closing_minute=a.closing_minute,

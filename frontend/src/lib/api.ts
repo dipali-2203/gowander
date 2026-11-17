@@ -10,6 +10,10 @@ export type AttractionInput = {
   weather_risk: number;
   crowd_risk: number;
   availability_risk: number;
+  weather_risk_known?: boolean;
+  crowd_risk_known?: boolean;
+  availability_risk_known?: boolean;
+  risk_metadata?: Record<string, Record<string, unknown>>;
   opening_minute: number;
   closing_minute: number;
   cost_known?: boolean;
@@ -62,14 +66,16 @@ export type GeneratedItinerary = {
       wait_minutes: number;
       cost: number;
       preference_score: number;
-      risk_score: number;
+      risk_score: number | null;
+      risk_data_status?: "verified" | "assumed" | "partial" | "unavailable" | "not_applicable";
     }>;
   }>;
   total_cost: number;
   total_travel_minutes: number;
   total_visit_minutes: number;
   satisfaction: number;
-  risk_score: number;
+  risk_score: number | null;
+  risk_data_status: "verified" | "assumed" | "partial" | "unavailable" | "not_applicable";
   feasible: boolean;
   warnings: string[];
   data_source: "synthetic" | "user_supplied" | "osm";
@@ -106,8 +112,10 @@ export type ParetoAlternative = {
     total_cost: number;
     total_travel_minutes: number;
     satisfaction: number;
-    risk_score: number;
+    risk_score: number | null;
+    risk_data_status?: "verified" | "assumed" | "partial" | "unavailable" | "not_applicable";
   };
+  risk_data_status: "verified" | "assumed" | "partial" | "unavailable" | "not_applicable";
 };
 
 export type PlanningResult = {
@@ -120,7 +128,8 @@ export type PlanningResult = {
     total_cost: number;
     total_travel_minutes: number;
     satisfaction: number;
-    risk_score: number;
+    risk_score: number | null;
+    risk_data_status?: "verified" | "assumed" | "partial" | "unavailable" | "not_applicable";
   };
 };
 
@@ -129,7 +138,8 @@ export type ScenarioResult = {
   total_cost: number;
   total_travel_minutes: number;
   satisfaction: number;
-  risk_score: number;
+  risk_score: number | null;
+  risk_data_status?: "verified" | "assumed" | "partial" | "unavailable" | "not_applicable";
   feasible: boolean;
   warnings: string[];
   disruptions_applied: string[];
@@ -140,8 +150,9 @@ export type ScenarioResult = {
 export type ReliabilityResult = {
   scenarios: number;
   seed: number;
-  completion_probability: number;
-  expected_disruptions: number;
+  completion_probability: number | null;
+  expected_disruptions: number | null;
+  risk_data_status: "verified" | "assumed" | "partial" | "unavailable";
   assumption: string;
 };
 
@@ -149,9 +160,14 @@ export type ConditionsResult = {
   source: "estimated" | "live";
   conditions: Array<{
     attraction_id: string;
-    weather_risk: number;
-    crowd_risk: number;
-    availability_risk: number;
+    weather_risk: number | null;
+    crowd_risk: number | null;
+    availability_risk: number | null;
+    weather_risk_known: boolean;
+    crowd_risk_known: boolean;
+    availability_risk_known: boolean;
+    risk_data_status: "verified" | "assumed" | "partial" | "unavailable";
+    risk_metadata: Record<string, Record<string, unknown>>;
   }>;
 };
 

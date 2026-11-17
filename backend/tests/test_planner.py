@@ -9,6 +9,7 @@ from app.schemas import AttractionInput, Preferences
 from app.services.planner import (
     calculate_attraction_risk,
     generate_greedy_itinerary,
+    risk_data_status,
 )
 
 
@@ -69,6 +70,32 @@ def test_attraction_risk_calculation():
     risk = calculate_attraction_risk(attraction)
 
     assert risk == pytest.approx(0.2)
+
+
+def test_unknown_risk_is_not_verified_zero_and_known_zero_is_distinct():
+    from app.services.planner import optimizer_risk_proxy
+
+    unknown = AttractionInput(id="unknown", name="Unknown", category="history", latitude=0, longitude=0, visit_minutes=30, preference_score=0.5, data_source="osm")
+    known_zero = AttractionInput(id="zero", name="Zero", category="history", latitude=0, longitude=0, visit_minutes=30, preference_score=0.5, weather_risk=0, crowd_risk=0, availability_risk=0)
+    known_nonzero = AttractionInput(id="risk", name="Risk", category="history", latitude=0, longitude=0, visit_minutes=30, preference_score=0.5, weather_risk=0.2, crowd_risk=0, availability_risk=0)
+
+    assert calculate_attraction_risk(unknown) is None
+    assert optimizer_risk_proxy(unknown) == 0
+    assert calculate_attraction_risk(known_zero) == 0
+    assert calculate_attraction_risk(known_nonzero) == pytest.approx(0.2)
+    assert risk_data_status([known_zero]) == "assumed"
+    known_zero.risk_metadata = {
+        key: {"verified": True, "source": "field_observation", "observed_at": "2026-11-17T00:00:00Z"}
+        for key in ("weather", "crowd", "availability")
+    }
+    assert risk_data_status([known_zero]) == "verified"
+
+    unknown.opening_minute = 0
+    unknown.closing_minute = 240
+    plan = generate_greedy_itinerary([unknown], Preferences(), 0, 0, 1000, 240)
+    assert plan["risk_score"] is None
+    assert plan["risk_data_status"] == "unavailable"
+    assert any("known-components-only proxy" in warning for warning in plan["warnings"])
 
 
 def test_planner_respects_budget():

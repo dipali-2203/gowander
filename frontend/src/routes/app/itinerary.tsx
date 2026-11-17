@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { useTripStore } from "@/store/trip";
+import { riskAssessmentLabel, riskProxyLabel } from "@/lib/risk-display.js";
 import {
   getTrip,
   getUserTrips,
@@ -250,7 +251,20 @@ function Itinerary() {
     city: generatedDestination ?? "Generated itinerary",
     date: `${day.date} · ${generated.data_source} planning data`,
     weather: "Risk estimate",
-    temp: `Risk ${((1 - day.stops.reduce((survival, stop) => survival * (1 - stop.risk_score), 1)) * 100).toFixed(0)}%`,
+    temp:
+      day.stops.length &&
+      day.stops.every(
+        (stop) =>
+          typeof stop.risk_score === "number" &&
+          stop.risk_data_status &&
+          stop.risk_data_status !== "unavailable" &&
+          stop.risk_data_status !== "partial",
+      )
+        ? riskAssessmentLabel(
+            1 - day.stops.reduce((survival, stop) => survival * (1 - (stop.risk_score ?? 0)), 1),
+            generated.risk_data_status,
+          )
+        : "Risk data unavailable",
     travelTime: `${day.total_travel_minutes} min`,
     distance: `${day.reserved_break_minutes} min meal/rest time`,
     hotel: "Accommodation is outside this baseline optimizer",
@@ -261,7 +275,7 @@ function Itinerary() {
         time: `${formatClock(stop.arrival_minute)}–${formatClock(stop.departure_minute)}`,
         attractionId: stop.attraction_id,
         title: stop.name,
-        detail: `${stop.departure_minute - stop.arrival_minute} min visit · ${stop.travel_minutes_before} min travel${stop.wait_minutes ? ` · ${stop.wait_minutes} min wait` : ""} · ${Math.round(stop.risk_score * 100)}% estimated disruption risk`,
+        detail: `${stop.departure_minute - stop.arrival_minute} min visit · ${stop.travel_minutes_before} min travel${stop.wait_minutes ? ` · ${stop.wait_minutes} min wait` : ""} · ${riskAssessmentLabel(stop.risk_score, stop.risk_data_status)}`,
         cost: stop.cost,
       })),
       ...(day.stops.length > 0 ? day.meal_breaks : []).map((meal) => ({
@@ -553,13 +567,26 @@ function Itinerary() {
               </div>
               {reliability ? (
                 <div className="text-sm">
-                  <p className="text-2xl font-semibold">
-                    {Math.round(reliability.completion_probability * 100)}%
-                  </p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Estimated completion probability · {reliability.expected_disruptions.toFixed(2)}{" "}
-                    expected disruptions
-                  </p>
+                  {reliability.completion_probability === null ||
+                  reliability.expected_disruptions === null ? (
+                    <p className="font-medium">Risk data unavailable</p>
+                  ) : (
+                    <>
+                      <p className="text-2xl font-semibold">
+                        {Math.round(reliability.completion_probability * 100)}%
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Estimated completion probability ·{" "}
+                        {reliability.expected_disruptions.toFixed(2)} expected disruptions (
+                        {reliability.risk_data_status})
+                      </p>
+                    </>
+                  )}
+                  {reliability.completion_probability === null ? (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Required risk data is incomplete, so no probability was calculated.
+                    </p>
+                  ) : null}
                 </div>
               ) : null}
             </div>
@@ -599,10 +626,32 @@ function Itinerary() {
                 </Button>
               </div>
               {conditions ? (
-                <p className="text-xs text-muted-foreground">
-                  Source: <span className="font-medium text-foreground">{conditions.source}</span> ·{" "}
-                  {conditions.conditions.length} attraction snapshots
-                </p>
+                <div className="space-y-2 text-xs text-muted-foreground">
+                  <p>
+                    Source: <span className="font-medium text-foreground">{conditions.source}</span>{" "}
+                    · {conditions.conditions.length} attraction snapshots
+                  </p>
+                  {conditions.conditions.map((condition) => (
+                    <p key={condition.attraction_id}>
+                      {condition.attraction_id}:{" "}
+                      {[
+                        ["Weather", condition.weather_risk, condition.weather_risk_known],
+                        ["Crowd", condition.crowd_risk, condition.crowd_risk_known],
+                        [
+                          "Availability",
+                          condition.availability_risk,
+                          condition.availability_risk_known,
+                        ],
+                      ]
+                        .map(
+                          ([label, value, known]) =>
+                            `${label}: ${known ? `${Math.round(Number(value) * 100)}%` : "unknown"}`,
+                        )
+                        .join(" · ")}{" "}
+                      · {condition.risk_data_status}
+                    </p>
+                  ))}
+                </div>
               ) : null}
             </div>
           ) : null}
@@ -612,7 +661,9 @@ function Itinerary() {
                 <h2 className="font-semibold">Pareto alternatives</h2>
                 <p className="mt-1 text-xs text-muted-foreground">
                   NSGA-II compares attraction selection trade-offs. Time and risk columns are
-                  planning proxies; these alternatives are single-day comparisons.
+                  planning proxies; when source risk data is incomplete, the proxy omits unknown
+                  dimensions and is not a safety assessment. A low or zero score is not a safety
+                  guarantee. These alternatives are single-day comparisons.
                 </p>
               </div>
               {alternatives.map((alternative, index) => (
@@ -624,7 +675,12 @@ function Itinerary() {
                   <div className="mt-2 grid grid-cols-2 gap-2 text-muted-foreground">
                     <span>₹{alternative.objectives.cost.toLocaleString("en-IN")}</span>
                     <span>{Math.round(alternative.objectives.time_proxy_minutes)} min</span>
-                    <span>Risk {Math.round(alternative.objectives.risk_proxy * 100)}%</span>
+                    <span>
+                      {riskProxyLabel(
+                        alternative.objectives.risk_proxy,
+                        alternative.risk_data_status,
+                      )}
+                    </span>
                     <span>Utility {alternative.objectives.utility.toFixed(2)}</span>
                   </div>
                 </div>
@@ -639,8 +695,8 @@ function Itinerary() {
               </p>
               <p className="text-muted-foreground">
                 ₹{annealing.total_cost.toLocaleString("en-IN")} · {annealing.total_travel_minutes}{" "}
-                min · satisfaction {annealing.satisfaction.toFixed(2)} · risk{" "}
-                {Math.round(annealing.risk_score * 100)}%
+                min · satisfaction {annealing.satisfaction.toFixed(2)} ·{" "}
+                {riskAssessmentLabel(annealing.risk_score, annealing.risk_data_status)}
               </p>
             </div>
           ) : null}
