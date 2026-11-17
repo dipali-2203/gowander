@@ -1,3 +1,5 @@
+import { readableErrorMessage } from "./error-message.js";
+
 export type AttractionInput = {
   id: string;
   name: string;
@@ -72,6 +74,7 @@ export type GeneratedItinerary = {
       preference_score: number;
       risk_score: number | null;
       risk_data_status?: "verified" | "assumed" | "partial" | "unavailable" | "not_applicable";
+      weather_assessment?: WeatherRiskAssessment;
     }>;
   }>;
   total_cost: number;
@@ -229,6 +232,83 @@ export type AccountTrip = {
   created_at: string | null;
   updated_at: string | null;
   itinerary_stale: boolean;
+  itinerary_revision: number;
+  completed_attraction_ids: string[];
+  pending_itinerary_revision: WeatherReplanProposal | null;
+  itinerary_history?: Array<{ revision: number; saved_at: string; itinerary: GeneratedItinerary }>;
+};
+
+export type WeatherReplanProposal = {
+  proposal_id: string;
+  base_revision: number;
+  mode: "forecast";
+  day_number: number;
+  date: string;
+  provider: string;
+  retrieved_at: string;
+  attribution: string;
+  forecast_available: boolean;
+  can_accept: boolean;
+  original_stops: GeneratedItinerary["days"][number]["stops"];
+  revised_stops: GeneratedItinerary["days"][number]["stops"];
+  weather_summary: Array<{
+    attraction_id: string;
+    name: string;
+    scheduled_time: string | null;
+    risk: WeatherRiskAssessment;
+  }>;
+  changes: Array<{
+    status: string;
+    original: Record<string, unknown>;
+    revised: Record<string, unknown>;
+    reason: string;
+    additional_travel_minutes: number;
+    additional_cost: number;
+    weather_risk?: WeatherRiskAssessment;
+    alternative_weather_risk?: WeatherRiskAssessment;
+  }>;
+  revised_itinerary: GeneratedItinerary;
+  additional_travel_minutes: number;
+  additional_cost: number;
+  within_budget: boolean;
+  warnings: string[];
+};
+
+export type WeatherRiskAssessment = {
+  known: boolean;
+  score: number | null;
+  level: "low" | "moderate" | "high" | "unavailable";
+  advisory_score: number | null;
+  provider: string;
+  data_kind: "forecast" | "observation" | "scenario";
+  forecast_time: string | null;
+  retrieved_at: string;
+  confidence: "forecast" | "partial" | "unavailable";
+  condition: string | null;
+  condition_kind:
+    | "sun"
+    | "partly_cloudy"
+    | "cloud"
+    | "fog"
+    | "drizzle"
+    | "rain"
+    | "snow"
+    | "thunderstorm"
+    | "unknown";
+  variables: Partial<
+    Record<
+      | "precipitation_probability"
+      | "precipitation"
+      | "temperature_2m"
+      | "apparent_temperature"
+      | "wind_speed_10m"
+      | "weather_code",
+      number
+    >
+  >;
+  advisories: Array<{ type: string; description: string; score: number }>;
+  explanation: string[];
+  outdoor_suitability_assumed: boolean;
 };
 
 export type TripPlanningOptions = {
@@ -285,10 +365,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     );
   }
   if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as { detail?: string } | null;
+    const body: unknown = await response.json().catch(() => null);
     throw new Error(
-      body?.detail ??
+      readableErrorMessage(
+        body,
         `The planning service could not complete the request (HTTP ${response.status}).`,
+      ),
     );
   }
   return response.json() as Promise<T>;
@@ -607,6 +689,57 @@ export function replanScenario(
       data_source: "synthetic",
     }),
   });
+}
+
+export function proposeWeatherReplan(tripId: number, dayNumber: number) {
+  return request<WeatherReplanProposal>(`/api/v1/trips/${tripId}/replan/weather`, {
+    method: "POST",
+    body: JSON.stringify({ day_number: dayNumber }),
+  });
+}
+
+export function saveCompletedActivities(
+  tripId: number,
+  completedAttractionIds: string[],
+  itineraryRevision: number,
+) {
+  return request<{ completed_attraction_ids: string[]; itinerary_revision: number }>(
+    `/api/v1/trips/${tripId}/completed-activities`,
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        completed_attraction_ids: completedAttractionIds,
+        itinerary_revision: itineraryRevision,
+      }),
+    },
+  );
+}
+
+export function acceptWeatherReplan(tripId: number, proposal: WeatherReplanProposal) {
+  return request<{
+    latest_itinerary: GeneratedItinerary;
+    itinerary_revision: number;
+    completed_attraction_ids: string[];
+  }>(`/api/v1/trips/${tripId}/replan/weather/accept`, {
+    method: "POST",
+    body: JSON.stringify({
+      proposal_id: proposal.proposal_id,
+      base_revision: proposal.base_revision,
+    }),
+  });
+}
+
+export function rejectWeatherReplan(tripId: number, proposal: WeatherReplanProposal) {
+  return request<{ rejected: boolean; itinerary_revision: number }>(
+    `/api/v1/trips/${tripId}/replan/weather/reject`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        proposal_id: proposal.proposal_id,
+        base_revision: proposal.base_revision,
+      }),
+    },
+  );
 }
 
 export function simulateReliability(tripId: number, attractions: AttractionInput[]) {

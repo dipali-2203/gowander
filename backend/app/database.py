@@ -44,6 +44,10 @@ def migrate_sqlite_schema() -> None:
             "optimization_results": "JSON NOT NULL DEFAULT '{}'",
             "updated_at": "TIMESTAMP WITH TIME ZONE",
             "itinerary_stale": "BOOLEAN NOT NULL DEFAULT FALSE",
+            "itinerary_revision": "INTEGER NOT NULL DEFAULT 0",
+            "itinerary_history": "JSON NOT NULL DEFAULT '[]'",
+            "completed_attraction_ids": "JSON NOT NULL DEFAULT '[]'",
+            "pending_itinerary_revision": "JSON",
         }
         with engine.begin() as connection:
             for name, definition in additions.items():
@@ -76,6 +80,10 @@ def migrate_sqlite_schema() -> None:
                 "optimization_results": "JSON NOT NULL DEFAULT '{}'",
                 "updated_at": "DATETIME",
                 "itinerary_stale": "INTEGER NOT NULL DEFAULT 0",
+                "itinerary_revision": "INTEGER NOT NULL DEFAULT 0",
+                "itinerary_history": "JSON NOT NULL DEFAULT '[]'",
+                "completed_attraction_ids": "JSON NOT NULL DEFAULT '[]'",
+                "pending_itinerary_revision": "JSON",
             }
             for name, definition in trip_additions.items():
                 if name not in trip_columns:

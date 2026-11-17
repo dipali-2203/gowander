@@ -28,6 +28,10 @@ class Trip(Base):
     planning_inputs: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     optimization_results: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     itinerary_stale: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    itinerary_revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    itinerary_history: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    completed_attraction_ids: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    pending_itinerary_revision: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     latest_itinerary: Mapped[dict | None] = mapped_column(
         JSON, nullable=True

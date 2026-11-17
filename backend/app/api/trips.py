@@ -39,6 +39,10 @@ from app.services.risk import calculate_attraction_risk, simulate_completion_pro
 from app.services.conditions import estimated_conditions
 from app.services.annealing import generate_annealed_itinerary
 from app.services.budget import attraction_budget_after_fixed_costs, estimate_trip_budget
+from app.schemas import CompletedActivitiesRequest, WeatherReplanRequest, WeatherProposalAction
+from app.services.weather import WeatherProviderError
+from app.services.weather_replanning import build_weather_proposal
+from sqlalchemy import update
 
 router = APIRouter(prefix="/api/v1/trips", tags=["Trips"], dependencies=[Depends(require_trip_access)])
 
@@ -57,6 +61,18 @@ def _serialize_legacy_risk(value):
     if isinstance(objectives, dict) and "risk_proxy" in objectives and "risk_data_status" not in result:
         result["risk_data_status"] = "unavailable"
     return result
+
+
+def _save_itinerary_revision(trip: Trip, itinerary: dict) -> None:
+    if trip.latest_itinerary is not None:
+        history = list(trip.itinerary_history or [])
+        history.append({"revision": trip.itinerary_revision, "saved_at": datetime.now(timezone.utc).isoformat(),
+                        "itinerary": trip.latest_itinerary})
+        trip.itinerary_history = history[-20:]
+    trip.itinerary_revision += 1
+    trip.latest_itinerary = itinerary
+    trip.completed_attraction_ids = []
+    trip.pending_itinerary_revision = None
 
 
 def _build_saved_multiday_plan(trip: Trip, request: MultiDayOptimizeRequest):
@@ -148,6 +164,9 @@ def list_trips(db: Session = Depends(get_db), user: User = Depends(get_current_u
             "created_at": trip.created_at.isoformat() if trip.created_at else None,
             "updated_at": trip.updated_at.isoformat() if trip.updated_at else None,
             "itinerary_stale": trip.itinerary_stale,
+            "itinerary_revision": trip.itinerary_revision,
+            "completed_attraction_ids": trip.completed_attraction_ids or [],
+            "pending_itinerary_revision": trip.pending_itinerary_revision,
         }
         for trip in trips
     ]
@@ -219,6 +238,10 @@ def get_trip(
         "created_at": trip.created_at.isoformat() if trip.created_at else None,
         "updated_at": trip.updated_at.isoformat() if trip.updated_at else None,
         "itinerary_stale": trip.itinerary_stale,
+        "itinerary_revision": trip.itinerary_revision,
+        "completed_attraction_ids": trip.completed_attraction_ids or [],
+        "pending_itinerary_revision": trip.pending_itinerary_revision,
+        "itinerary_history": trip.itinerary_history or [],
     }
 
 
@@ -246,6 +269,8 @@ def update_trip(trip_id: int, request: TripUpdate, db: Session = Depends(get_db)
             setattr(trip, key, value)
     if itinerary_inputs.intersection(changes):
         trip.itinerary_stale = True
+        trip.itinerary_revision += 1
+        trip.pending_itinerary_revision = None
     trip.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(trip)
@@ -274,6 +299,10 @@ def duplicate_trip(trip_id: int, db: Session = Depends(get_db)):
         planning_options=source.planning_options,
         planning_inputs=source.planning_inputs,
         optimization_results=source.optimization_results,
+        itinerary_revision=source.itinerary_revision,
+        itinerary_history=source.itinerary_history,
+        completed_attraction_ids=source.completed_attraction_ids,
+        pending_itinerary_revision=None,
         latest_itinerary=source.latest_itinerary,
         itinerary_stale=source.itinerary_stale,
     )
@@ -403,7 +432,7 @@ def optimize_trip(
         **result,
     )
 
-    trip.latest_itinerary = response.model_dump(mode="json")
+    _save_itinerary_revision(trip, response.model_dump(mode="json"))
     trip.itinerary_stale = False
     trip.optimization_results = {}
     db.commit()
@@ -427,7 +456,7 @@ def optimize_multiday_trip(
     response = MultiDayItineraryResponse(
         trip_id=trip.id, algorithm="greedy_multiday", data_source=request.data_source, **result
     )
-    trip.latest_itinerary = response.model_dump(mode="json")
+    _save_itinerary_revision(trip, response.model_dump(mode="json"))
     trip.planning_inputs = request.model_dump(mode="json")
     trip.itinerary_stale = False
     trip.optimization_results = {}
@@ -463,7 +492,7 @@ def regenerate_saved_trip(trip_id: int, db: Session = Depends(get_db)):
         **result,
     )
     # Replace the saved plan only after a complete replacement has been built.
-    trip.latest_itinerary = response.model_dump(mode="json")
+    _save_itinerary_revision(trip, response.model_dump(mode="json"))
     trip.updated_at = datetime.now(timezone.utc)
     trip.itinerary_stale = False
     trip.optimization_results = {}
@@ -546,6 +575,8 @@ def replan_scenario(trip_id: int, request: ScenarioReplanRequest, db: Session = 
         transport_mode=(trip.planning_options or {}).get("transportation_mode", "mixed"),
         walking_tolerance=Preferences.model_validate(trip.preferences).walking_tolerance,
     )
+
+
     adjusted, adjusted_matrix, closed, applied = apply_disruptions(remaining, request.disruptions, matrix)
     eligible = [item for item in adjusted if item.id not in closed and item.id not in request.closed_attraction_ids]
     if not eligible:
@@ -573,6 +604,83 @@ def replan_scenario(trip_id: int, request: ScenarioReplanRequest, db: Session = 
         disruptions_applied=applied, retained_planned_attraction_ids=retained_ids,
         change_count=len(selected_ids.symmetric_difference(previous_ids)), **result,
     )
+
+@router.put("/{trip_id}/completed-activities")
+def save_completed_activities(trip_id: int, request: CompletedActivitiesRequest, db: Session = Depends(get_db)):
+    trip = db.get(Trip, trip_id)
+    if trip is None:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    if request.itinerary_revision != trip.itinerary_revision:
+        raise HTTPException(status_code=409, detail="The itinerary changed. Refresh before updating completed activities.")
+    allowed = {stop.get("attraction_id") for day in (trip.latest_itinerary or {}).get("days", []) for stop in day.get("stops", [])}
+    completed = sorted(set(request.completed_attraction_ids))
+    if not set(completed).issubset(allowed):
+        raise HTTPException(status_code=422, detail="Completed activities must belong to the current itinerary.")
+    trip.completed_attraction_ids = completed
+    trip.pending_itinerary_revision = None
+    db.commit()
+    return {"completed_attraction_ids": completed, "itinerary_revision": trip.itinerary_revision}
+
+
+@router.post("/{trip_id}/replan/weather")
+def propose_weather_replan(trip_id: int, request: WeatherReplanRequest, db: Session = Depends(get_db)):
+    trip = db.get(Trip, trip_id)
+    if trip is None:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    try:
+        proposal = build_weather_proposal(trip, day_number=request.day_number)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except WeatherProviderError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    trip.pending_itinerary_revision = proposal
+    db.commit()
+    return proposal
+
+
+@router.post("/{trip_id}/replan/weather/accept")
+def accept_weather_replan(trip_id: int, request: WeatherProposalAction, db: Session = Depends(get_db)):
+    trip = db.get(Trip, trip_id)
+    if trip is None:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    proposal = trip.pending_itinerary_revision or {}
+    if proposal.get("proposal_id") != request.proposal_id:
+        raise HTTPException(status_code=404, detail="Weather proposal not found or expired.")
+    if request.base_revision != trip.itinerary_revision or proposal.get("base_revision") != trip.itinerary_revision:
+        trip.pending_itinerary_revision = None
+        db.commit()
+        raise HTTPException(status_code=409, detail="The itinerary changed after this proposal. Generate a new proposal.")
+    snapshot = {"revision": trip.itinerary_revision, "saved_at": datetime.now(timezone.utc).isoformat(),
+                "itinerary": trip.latest_itinerary}
+    history = list(trip.itinerary_history or [])
+    history.append(snapshot)
+    trip.itinerary_history = history[-20:]
+    changed = db.execute(update(Trip).where(
+        Trip.id == trip_id, Trip.itinerary_revision == request.base_revision
+    ).values(itinerary_revision=request.base_revision + 1))
+    if changed.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="The itinerary changed concurrently. Refresh and try again.")
+    trip.latest_itinerary = proposal["revised_itinerary"]
+    trip.pending_itinerary_revision = None
+    trip.itinerary_stale = False
+    db.commit()
+    return {"latest_itinerary": trip.latest_itinerary, "itinerary_revision": trip.itinerary_revision,
+            "completed_attraction_ids": trip.completed_attraction_ids or []}
+
+
+@router.post("/{trip_id}/replan/weather/reject")
+def reject_weather_replan(trip_id: int, request: WeatherProposalAction, db: Session = Depends(get_db)):
+    trip = db.get(Trip, trip_id)
+    if trip is None:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    proposal = trip.pending_itinerary_revision or {}
+    if proposal.get("proposal_id") != request.proposal_id:
+        raise HTTPException(status_code=404, detail="Weather proposal not found or expired.")
+    trip.pending_itinerary_revision = None
+    db.commit()
+    return {"rejected": True, "itinerary_revision": trip.itinerary_revision}
+
 
 from sqlalchemy import func
 
@@ -674,7 +782,7 @@ def optimize_saved_trip(
         **result,
     )
 
-    trip.latest_itinerary = response.model_dump(mode="json")
+    _save_itinerary_revision(trip, response.model_dump(mode="json"))
     trip.itinerary_stale = False
     db.commit()
 
@@ -819,7 +927,7 @@ def replan_trip(
         **result,
     )
 
-    trip.latest_itinerary = response.model_dump(mode="json")
+    _save_itinerary_revision(trip, response.model_dump(mode="json"))
     trip.itinerary_stale = False
     db.commit()
 

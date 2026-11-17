@@ -150,6 +150,116 @@ def test_authenticated_trip_reliability_endpoint_returns_simulation(client: Test
     assert response.json()["expected_disruptions"] >= 0
 
 
+def test_scenario_replanning_accepts_all_four_simulated_disruptions(client: TestClient):
+    assert signup(client, "scenario-replan@example.com").status_code == 201
+    created = client.post(
+        "/api/v1/trips",
+        headers={"Origin": ORIGIN},
+        json={
+            "destination": "Jaipur",
+            "start_date": "2026-12-01",
+            "end_date": "2026-12-01",
+            "budget": 50000,
+            "available_minutes_per_day": 1200,
+            "start_latitude": 26.9124,
+            "start_longitude": 75.7873,
+            "preferences": {},
+        },
+    )
+    assert created.status_code == 201
+    trip_id = created.json()["id"]
+    attractions = [
+        {
+            "id": "planned-museum",
+            "name": "Planned Museum",
+            "category": "museum",
+            "latitude": 26.92,
+            "longitude": 75.82,
+            "cost": 100,
+            "visit_minutes": 60,
+            "preference_score": 0.9,
+            "opening_minute": 540,
+            "closing_minute": 1020,
+        },
+        {
+            "id": "garden",
+            "name": "Garden",
+            "category": "park",
+            "latitude": 26.93,
+            "longitude": 75.83,
+            "cost": 50,
+            "visit_minutes": 60,
+            "preference_score": 0.8,
+            "opening_minute": 540,
+            "closing_minute": 1020,
+        },
+    ]
+    for kind in ("rainfall", "traffic", "crowding", "closure"):
+        response = client.post(
+            f"/api/v1/trips/{trip_id}/replan-scenario",
+            headers={"Origin": ORIGIN},
+            json={
+                "attractions": attractions,
+                "disruptions": [{
+                    "kind": kind,
+                    "severity": 0.6,
+                    "affected_attraction_ids": ["planned-museum"] if kind == "closure" else [],
+                }],
+                "current_latitude": 26.9124,
+                "current_longitude": 75.7873,
+                "remaining_budget": 50000,
+                "remaining_minutes": 1200,
+                "completed_attraction_ids": [],
+                "closed_attraction_ids": [],
+                "previous_planned_attraction_ids": ["planned-museum", "garden"],
+                "data_source": "synthetic",
+            },
+        )
+        assert response.status_code == 200, f"{kind}: {response.text}"
+        result = response.json()
+        assert result["algorithm"] == "scenario_replan"
+        assert result["data_source"] == "synthetic"
+        assert len(result["disruptions_applied"]) == 1
+        assert result["stops"] or result["warnings"]
+
+
+def test_scenario_validation_errors_are_fastapi_detail_arrays(client: TestClient):
+    assert signup(client, "scenario-validation@example.com").status_code == 201
+    created = client.post(
+        "/api/v1/trips",
+        headers={"Origin": ORIGIN},
+        json={
+            "destination": "Jaipur",
+            "start_date": "2026-12-01",
+            "end_date": "2026-12-01",
+            "budget": 50000,
+            "available_minutes_per_day": 1200,
+            "start_latitude": 26.9124,
+            "start_longitude": 75.7873,
+            "preferences": {},
+        },
+    )
+    response = client.post(
+        f"/api/v1/trips/{created.json()['id']}/replan-scenario",
+        headers={"Origin": ORIGIN},
+        json={
+            "attractions": [{
+                "id": "planned-museum", "name": "Planned Museum", "category": "museum",
+                "latitude": 26.92, "longitude": 75.82, "visit_minutes": 60,
+                "preference_score": 0.9,
+            }],
+            "disruptions": [{"kind": "rainfall", "severity": 2}],
+            "current_latitude": 26.9124,
+            "current_longitude": 75.7873,
+            "remaining_budget": 50000,
+            "remaining_minutes": 1200,
+        },
+    )
+    assert response.status_code == 422
+    assert isinstance(response.json()["detail"], list)
+    assert any(error["loc"][-1] == "severity" for error in response.json()["detail"])
+
+
 def test_trip_crud_persists_inputs_and_keeps_old_plan_when_edited(client: TestClient):
     assert signup(client, "trip-owner@example.com").status_code == 201
     created = client.post(
@@ -271,6 +381,101 @@ def test_trip_crud_persists_inputs_and_keeps_old_plan_when_edited(client: TestCl
     }).status_code == 200
     assert client.delete(f"/api/v1/trips/{duplicate_id}", headers={"Origin": ORIGIN}).json() == {"ok": True}
     assert client.get(f"/api/v1/trips/{duplicate_id}").status_code == 404
+
+
+def test_weather_proposal_is_separate_until_accept_and_persists_revision(client: TestClient, monkeypatch):
+    from app.database import get_db
+    from app.models import Trip
+    from app.services import weather_replanning
+
+    assert signup(client, "weather-trip@example.com").status_code == 201
+    created = client.post("/api/v1/trips", headers={"Origin": ORIGIN}, json={
+        "destination": "Jaipur", "start_date": "2026-12-01", "end_date": "2026-12-02",
+        "budget": 50000, "available_minutes_per_day": 1200,
+        "start_latitude": 26.9, "start_longitude": 75.8,
+    })
+    trip_id = created.json()["id"]
+    old_plan = {"trip_id": trip_id, "algorithm": "greedy_multiday", "data_source": "osm",
+        "total_cost": 10, "total_travel_minutes": 15, "total_visit_minutes": 120,
+        "satisfaction": .8, "risk_score": None, "risk_data_status": "unavailable", "feasible": True, "warnings": [],
+        "days": [
+            {"day_number": 1, "date": "2026-12-01", "stops": [{"attraction_id": "view", "name": "Viewpoint",
+                "arrival_minute": 840, "departure_minute": 900, "travel_minutes_before": 10, "cost": 10,
+                "preference_score": .8, "risk_score": None}], "total_cost": 10, "total_travel_minutes": 10,
+                "total_visit_minutes": 60, "feasible": True, "warnings": []},
+            {"day_number": 2, "date": "2026-12-02", "stops": [{"attraction_id": "other", "name": "Other",
+                "arrival_minute": 600, "departure_minute": 660, "travel_minutes_before": 5, "cost": 0,
+                "preference_score": .5, "risk_score": None}], "total_cost": 0, "total_travel_minutes": 5,
+                "total_visit_minutes": 60, "feasible": True, "warnings": []},
+        ]}
+    catalog = [
+        {"id": "view", "name": "Viewpoint", "category": "viewpoint", "latitude": 26.9, "longitude": 75.8,
+         "cost": 10, "visit_minutes": 60, "preference_score": .8, "raw_tags": {}},
+        {"id": "gallery", "name": "Indoor Gallery", "category": "museum", "latitude": 26.901, "longitude": 75.801,
+         "cost": 5, "visit_minutes": 60, "preference_score": .7, "raw_tags": {"tourism": "museum"}},
+        {"id": "other", "name": "Other", "category": "park", "latitude": 26.92, "longitude": 75.82,
+         "cost": 0, "visit_minutes": 60, "preference_score": .5, "raw_tags": {}},
+    ]
+    db = next(app.dependency_overrides[get_db]())
+    trip = db.get(Trip, trip_id)
+    trip.latest_itinerary = old_plan
+    trip.completed_attraction_ids = ["other"]
+    trip.planning_inputs = {"attractions": catalog, "meal_breaks": [], "confirmed_activities": [], "data_source": "osm"}
+    db.commit()
+    db.close()
+
+    def fake_fetch(points, **kwargs):
+        data = {}
+        for lat, lon in points:
+            rain = 90 if (lat, lon) == (26.9, 75.8) else 0
+            data[(lat, lon)] = {"provider": "open-meteo", "retrieved_at": "2026-11-30T00:00:00+00:00",
+                "timezone": "Asia/Kolkata", "hourly": {"precipitation_probability": {"2026-12-01T14:00": rain},
+                "precipitation": {"2026-12-01T14:00": 4 if rain else 0},
+                "temperature_2m": {"2026-12-01T14:00": 27},
+                "apparent_temperature": {"2026-12-01T14:00": 26},
+                "wind_speed_10m": {"2026-12-01T14:00": 8},
+                "weather_code": {"2026-12-01T14:00": 61 if rain else 0}}}
+        return data
+    monkeypatch.setattr(weather_replanning, "fetch_forecasts", fake_fetch)
+    proposed = client.post(f"/api/v1/trips/{trip_id}/replan/weather", headers={"Origin": ORIGIN}, json={"day_number": 1})
+    assert proposed.status_code == 200, proposed.text
+    proposal = proposed.json()
+    assert proposal["revised_stops"][0]["attraction_id"] == "gallery"
+    unchanged = client.get(f"/api/v1/trips/{trip_id}").json()["latest_itinerary"]
+    assert unchanged["days"][0]["stops"][0]["attraction_id"] == "view"
+    assert unchanged["days"][1]["stops"][0]["attraction_id"] == "other"
+    assert client.get(f"/api/v1/trips/{trip_id}").json()["pending_itinerary_revision"]["proposal_id"] == proposal["proposal_id"]
+    accepted = client.post(f"/api/v1/trips/{trip_id}/replan/weather/accept", headers={"Origin": ORIGIN},
+        json={"proposal_id": proposal["proposal_id"], "base_revision": proposal["base_revision"]})
+    assert accepted.status_code == 200, accepted.text
+    saved = client.get(f"/api/v1/trips/{trip_id}").json()
+    assert saved["itinerary_revision"] == 1
+    assert saved["pending_itinerary_revision"] is None
+    assert saved["latest_itinerary"]["days"][0]["stops"][0]["attraction_id"] == "gallery"
+    assert "weather_assessment" in saved["latest_itinerary"]["days"][0]["stops"][0]
+    assert saved["latest_itinerary"]["days"][1]["stops"][0]["attraction_id"] == "other"
+    assert saved["latest_itinerary"]["days"][1]["stops"][0]["arrival_minute"] == 600
+    assert saved["completed_attraction_ids"] == ["other"]
+    assert saved["itinerary_history"][0]["itinerary"] == old_plan
+    marked = client.put(f"/api/v1/trips/{trip_id}/completed-activities", headers={"Origin": ORIGIN},
+        json={"completed_attraction_ids": ["gallery"], "itinerary_revision": 1})
+    assert marked.status_code == 200
+    assert client.get(f"/api/v1/trips/{trip_id}").json()["completed_attraction_ids"] == ["gallery"]
+    next_proposal = client.post(f"/api/v1/trips/{trip_id}/replan/weather", headers={"Origin": ORIGIN}, json={"day_number": 1}).json()
+    rejected = client.post(f"/api/v1/trips/{trip_id}/replan/weather/reject", headers={"Origin": ORIGIN},
+        json={"proposal_id": next_proposal["proposal_id"], "base_revision": next_proposal["base_revision"]})
+    assert rejected.status_code == 200
+    after_rejection = client.get(f"/api/v1/trips/{trip_id}").json()
+    assert after_rejection["latest_itinerary"] == saved["latest_itinerary"]
+    assert after_rejection["pending_itinerary_revision"] is None
+    assert after_rejection["itinerary_revision"] == saved["itinerary_revision"]
+    assert after_rejection["itinerary_history"] == saved["itinerary_history"]
+    stale_proposal = client.post(f"/api/v1/trips/{trip_id}/replan/weather", headers={"Origin": ORIGIN}, json={"day_number": 1}).json()
+    assert client.put(f"/api/v1/trips/{trip_id}", headers={"Origin": ORIGIN}, json={"budget": 49000}).status_code == 200
+    stale_accept = client.post(f"/api/v1/trips/{trip_id}/replan/weather/accept", headers={"Origin": ORIGIN},
+        json={"proposal_id": stale_proposal["proposal_id"], "base_revision": stale_proposal["base_revision"]})
+    assert stale_accept.status_code == 404
+    assert client.get(f"/api/v1/trips/{trip_id}").json()["latest_itinerary"] == saved["latest_itinerary"]
 
 
 def test_login_rejects_bad_password_and_logout_revokes_session(client: TestClient):

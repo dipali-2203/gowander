@@ -239,6 +239,42 @@ class ScenarioReplanRequest(ReplanRequest):
         default_factory=list
     )
 
+
+class CompletedActivitiesRequest(BaseModel):
+    completed_attraction_ids: list[str] = Field(default_factory=list)
+    itinerary_revision: int = Field(ge=0)
+
+
+class WeatherReplanRequest(BaseModel):
+    day_number: int = Field(ge=1)
+
+
+class WeatherProposalAction(BaseModel):
+    proposal_id: str = Field(min_length=8, max_length=80)
+    base_revision: int = Field(ge=0)
+
+
+class WeatherReplanProposalResponse(BaseModel):
+    proposal_id: str
+    base_revision: int
+    mode: Literal["forecast"] = "forecast"
+    day_number: int
+    date: date
+    provider: str
+    retrieved_at: datetime
+    attribution: str
+    forecast_available: bool
+    can_accept: bool
+    original_stops: list[dict]
+    revised_stops: list[dict]
+    weather_summary: list[dict]
+    changes: list[dict]
+    revised_itinerary: dict
+    additional_travel_minutes: int
+    additional_cost: float
+    within_budget: bool
+    warnings: list[str]
+
 class ItineraryStop(BaseModel):
     attraction_id: str
     name: str

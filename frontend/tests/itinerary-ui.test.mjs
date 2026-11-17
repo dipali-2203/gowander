@@ -18,7 +18,6 @@ test("advanced itinerary tools are grouped in a native collapsed-by-default disc
   for (const section of [
     "Advanced Optimization Insights",
     "Reliability estimate",
-    "Planning conditions",
     "Pareto",
     "Single-day simulated annealing",
     "What-if replanning",
@@ -26,6 +25,9 @@ test("advanced itinerary tools are grouped in a native collapsed-by-default disc
   ]) {
     assert.ok(advanced.includes(section), `missing advanced section: ${section}`);
   }
+  assert.doesNotMatch(source, /Planning conditions|inspectConditions|conditions\.conditions/);
+  assert.match(source, /Forecast for scheduled activities/);
+  assert.match(source, /WeatherForecastCard/);
   assert.ok(savedTripSource.includes("Advanced Optimization Insights"));
   assert.ok(savedTripSource.includes("Saved single-day optimization alternatives"));
   assert.ok(savedTripSource.includes("stop.wait_reason"));
@@ -36,7 +38,7 @@ test("traveler budget copy identifies destination scope and unknown fees", () =>
   assert.ok(source.includes("travel and unknown attraction fees are excluded."));
   assert.ok(source.includes("zero-cost placeholder"));
   assert.ok(source.includes("budgetEstimate.exclusions.map"));
-  assert.ok(source.includes("loadConditions(generated.trip_id, plannedAttractions)"));
+  assert.ok(source.includes("riskDetailsLabel("));
   assert.ok(savedTripSource.includes("Estimated destination expenses"));
   assert.ok(savedTripSource.includes("internal zero-cost placeholders do not mean entry is free"));
   assert.ok(savedTripSource.includes("itinerary.budget_estimate.exclusions.map"));
@@ -51,4 +53,43 @@ test("single-day optimizer results are explicitly distinguished from the multi-d
 test("scheduled waits include an explanation when present", () => {
   assert.ok(source.includes("stop.wait_reason"));
   assert.ok(source.includes("min waiting"));
+});
+
+test("accepted and rejected weather proposals clear their pending UI state", () => {
+  assert.match(
+    source,
+    /resolvedWeatherProposalIds\.current\.add\(weatherProposal\.proposal_id\);\s*setWeatherProposal\(null\);\s*toast\.success\("Itinerary updated based on the weather forecast\."\)/,
+  );
+  assert.match(
+    source,
+    /await rejectWeatherReplan\(selectedTripId, weatherProposal\);\s*resolvedWeatherProposalIds\.current\.add\(weatherProposal\.proposal_id\);\s*setWeatherProposal\(null\)/,
+  );
+  assert.match(
+    source,
+    /restorePendingWeatherProposal\(saved\.pending_itinerary_revision \?\? null, saved\.id\)/,
+  );
+  assert.match(
+    source,
+    /proposal\.base_revision < \(itineraryRevisionsByTrip\.current\.get\(tripId\) \?\? 0\)/,
+  );
+  assert.match(
+    source,
+    /if \(\s*saved\.itinerary_revision <\s*\(itineraryRevisionsByTrip\.current\.get\(saved\.id\) \?\? 0\)\s*\)\s*return/,
+  );
+});
+
+test("weather proposal UI is pending-only while accepted forecasts remain in their itinerary day", () => {
+  assert.match(source, /\{weatherProposal \? \([\s\S]*?Forecast-based proposal/);
+  assert.match(source, /weatherSummary: day\.stops\.flatMap/);
+  assert.match(source, /day\.weatherSummary\.map\(\(item\) => \(\s*<WeatherForecastCard/);
+  assert.match(source, /restorePendingWeatherProposal\(proposal, selectedTripId\)/);
+});
+
+test("all four what-if controls remain simulated and available", () => {
+  assert.match(source, /\["rainfall", "traffic", "crowding", "closure"\]/);
+  assert.match(
+    source,
+    /Simulated what-if inputs use synthetic estimates and are not actual forecasts\./,
+  );
+  assert.match(source, /replanScenario\(/);
 });

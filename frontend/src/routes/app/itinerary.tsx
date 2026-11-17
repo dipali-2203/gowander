@@ -1,9 +1,15 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion } from "motion/react";
 import {
   Sun,
   CloudSun,
+  Cloud,
+  CloudDrizzle,
+  CloudRain,
+  CloudSnow,
+  CloudFog,
+  CloudLightning,
   Clock,
   Navigation,
   BedDouble,
@@ -20,17 +26,22 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { useTripStore } from "@/store/trip";
 import { riskAssessmentLabel, riskDetailsLabel, riskProxyLabel } from "@/lib/risk-display.js";
+import { readableErrorMessage } from "@/lib/error-message.js";
 import {
   getTrip,
   getUserTrips,
-  loadConditions,
   replanScenario,
+  proposeWeatherReplan,
+  saveCompletedActivities,
+  acceptWeatherReplan,
+  rejectWeatherReplan,
   simulateReliability,
   submitPreferenceFeedback,
-  type ConditionsResult,
   type ReliabilityResult,
   type ScenarioResult,
   type AccountTrip,
+  type WeatherReplanProposal,
+  type WeatherRiskAssessment,
 } from "@/lib/api";
 
 export const Route = createFileRoute("/app/itinerary")({
@@ -63,6 +74,118 @@ function formatClock(minute: number) {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
+function formatForecastTimestamp(value: string | null | undefined) {
+  if (!value) return null;
+  const hasOffset = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value);
+  const date = new Date(hasOffset ? value : `${value}+05:30`);
+  if (Number.isNaN(date.getTime())) return value;
+  return `${new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "numeric",
+    month: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date)} IST`;
+}
+
+function WeatherConditionIcon({ kind }: { kind: WeatherRiskAssessment["condition_kind"] }) {
+  const Icon =
+    kind === "sun"
+      ? Sun
+      : kind === "partly_cloudy"
+        ? CloudSun
+        : kind === "fog"
+          ? CloudFog
+          : kind === "drizzle"
+            ? CloudDrizzle
+            : kind === "rain"
+              ? CloudRain
+              : kind === "snow"
+                ? CloudSnow
+                : kind === "thunderstorm"
+                  ? CloudLightning
+                  : Cloud;
+  return <Icon aria-hidden="true" className="h-5 w-5 shrink-0 text-primary" />;
+}
+
+function WeatherForecastCard({
+  item,
+}: {
+  item: { name: string; scheduled_time: string | null; risk: WeatherRiskAssessment };
+}) {
+  const values = item.risk.variables;
+  const readings: Array<[string, number | undefined, string]> = [
+    ["Temperature", values.temperature_2m, "°C"],
+    ["Feels like", values.apparent_temperature, "°C"],
+    ["Rain probability", values.precipitation_probability, "%"],
+    ["Expected precipitation", values.precipitation, " mm"],
+    ["Wind", values.wind_speed_10m, " km/h"],
+  ];
+  const hasReadings = readings.some(([, value]) => value !== undefined && value !== null);
+  const forecastTime = formatForecastTimestamp(item.scheduled_time ?? item.risk.forecast_time);
+  return (
+    <article className="rounded-md border border-border p-3">
+      <div className="flex items-center gap-2">
+        <WeatherConditionIcon kind={item.risk.condition_kind} />
+        <div>
+          <h3 className="text-sm font-medium">{item.name}</h3>
+          <p className="text-xs text-muted-foreground">
+            {item.risk.condition ?? "Condition unavailable"}
+            {forecastTime ? ` · ${forecastTime}` : ""}
+          </p>
+        </div>
+      </div>
+      {hasReadings ? (
+        <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-3">
+          {readings.map(([label, value, unit]) =>
+            value === undefined || value === null ? null : (
+              <div key={label}>
+                <dt className="text-muted-foreground">{label}</dt>
+                <dd className="font-medium">
+                  {value}
+                  {unit}
+                </dd>
+              </div>
+            ),
+          )}
+        </dl>
+      ) : (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Weather information unavailable for this activity.
+        </p>
+      )}
+      {!item.risk.known || item.risk.confidence === "partial" ? (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Forecast coverage is partial; unavailable fields are not assumed to be zero.
+        </p>
+      ) : null}
+      {item.risk.advisories.map((advisory, index) => (
+        <div
+          key={`${advisory.type}-${index}`}
+          className="mt-2 rounded-md bg-amber-50 p-2 text-xs text-amber-950"
+        >
+          <p className="font-medium">{advisoryLabel(advisory.type)}</p>
+          <p>{advisory.description}</p>
+        </div>
+      ))}
+    </article>
+  );
+}
+
+function advisoryLabel(type: string) {
+  return (
+    (
+      {
+        rain: "Rain advisory",
+        precipitation: "Precipitation advisory",
+        temperature: "Temperature advisory",
+        wind: "Wind advisory",
+        weather_condition: "Severe weather advisory",
+      } as Record<string, string>
+    )[type] ?? "Weather advisory"
+  );
+}
+
 function Itinerary() {
   const { tripId: requestedTripId } = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
@@ -78,7 +201,6 @@ function Itinerary() {
   const [scenario, setScenario] = useState<ScenarioResult | null>(null);
   const [replanning, setReplanning] = useState(false);
   const [reliability, setReliability] = useState<ReliabilityResult | null>(null);
-  const [conditions, setConditions] = useState<ConditionsResult | null>(null);
   const [remainingBudget, setRemainingBudget] = useState(60000);
   const [remainingMinutes, setRemainingMinutes] = useState(1200);
   const [completedAttractionIds, setCompletedAttractionIds] = useState<string[]>([]);
@@ -86,6 +208,23 @@ function Itinerary() {
   const [selectedTripId, setSelectedTripId] = useState<number | null>(generated?.trip_id ?? null);
   const [loadingTripList, setLoadingTripList] = useState(true);
   const [loadingSavedTrip, setLoadingSavedTrip] = useState(false);
+  const [itineraryRevision, setItineraryRevision] = useState(0);
+  const itineraryRevisionsByTrip = useRef(new Map<number, number>());
+  const [weatherProposal, setWeatherProposal] = useState<WeatherReplanProposal | null>(null);
+  const [weatherUnavailableDay, setWeatherUnavailableDay] = useState<number | null>(null);
+  const resolvedWeatherProposalIds = useRef(new Set<string>());
+  const restorePendingWeatherProposal = (
+    proposal: WeatherReplanProposal | null,
+    tripId: number,
+  ) => {
+    if (
+      proposal &&
+      (resolvedWeatherProposalIds.current.has(proposal.proposal_id) ||
+        proposal.base_revision < (itineraryRevisionsByTrip.current.get(tripId) ?? 0))
+    )
+      return;
+    setWeatherProposal(proposal);
+  };
 
   const restoreTrip = async (tripId: number) => {
     setLoadingSavedTrip(true);
@@ -95,6 +234,7 @@ function Itinerary() {
       if (!itinerary || !Array.isArray(itinerary.days)) {
         throw new Error("This saved trip does not have a multi-day itinerary yet.");
       }
+      if (saved.itinerary_revision < (itineraryRevisionsByTrip.current.get(saved.id) ?? 0)) return;
       setGenerated(
         itinerary,
         saved.destination,
@@ -105,7 +245,11 @@ function Itinerary() {
         saved.optimization_results.simulated_annealing ?? null,
       );
       setSelectedTripId(saved.id);
-      setCompletedAttractionIds([]);
+      itineraryRevisionsByTrip.current.set(saved.id, saved.itinerary_revision);
+      setItineraryRevision(saved.itinerary_revision);
+      setCompletedAttractionIds(saved.completed_attraction_ids ?? []);
+      restorePendingWeatherProposal(saved.pending_itinerary_revision ?? null, saved.id);
+      setWeatherUnavailableDay(null);
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : "Could not open the saved itinerary.");
     } finally {
@@ -124,6 +268,17 @@ function Itinerary() {
         const target =
           requestedTripId ?? (currentTripIsOwned ? generated.trip_id : undefined) ?? trips[0]?.id;
         if (target !== undefined) {
+          const savedState = trips.find((trip) => trip.id === target);
+          if (savedState) {
+            if (
+              savedState.itinerary_revision >= (itineraryRevisionsByTrip.current.get(target) ?? 0)
+            ) {
+              itineraryRevisionsByTrip.current.set(target, savedState.itinerary_revision);
+              setItineraryRevision(savedState.itinerary_revision);
+              setCompletedAttractionIds(savedState.completed_attraction_ids ?? []);
+              restorePendingWeatherProposal(savedState.pending_itinerary_revision ?? null, target);
+            }
+          }
           setSelectedTripId(target);
           if (!trips.some((trip) => trip.id === target)) {
             if (generated) clearTrip();
@@ -173,25 +328,74 @@ function Itinerary() {
         ),
       );
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not replan this scenario.");
+      toast.error(readableErrorMessage(error, "Could not replan this scenario."));
     } finally {
       setReplanning(false);
     }
   };
-  const inspectConditions = async () => {
-    if (!generated || planningAttractions.length === 0) return;
+  const checkWeatherForDay = async (dayNumber: number) => {
+    if (!generated || !selectedTripId) return;
+    setReplanning(true);
     try {
-      const plannedIds = new Set(
-        generated.days.flatMap((day) => day.stops.map((stop) => stop.attraction_id)),
-      );
-      const plannedAttractions = planningAttractions.filter((item) => plannedIds.has(item.id));
-      if (plannedAttractions.length === 0) {
-        toast.error("This itinerary has no scheduled attractions to inspect.");
-        return;
-      }
-      setConditions(await loadConditions(generated.trip_id, plannedAttractions));
+      const proposal = await proposeWeatherReplan(selectedTripId, dayNumber);
+      restorePendingWeatherProposal(proposal, selectedTripId);
+      setWeatherUnavailableDay(null);
+      if (!proposal.forecast_available)
+        toast.message("Weather information unavailable for this day.");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not load planning conditions.");
+      setWeatherProposal(null);
+      setWeatherUnavailableDay(dayNumber);
+      toast.error(readableErrorMessage(error, "Could not check the forecast."));
+    } finally {
+      setReplanning(false);
+    }
+  };
+  const toggleCompleted = async (attractionId: string) => {
+    if (!generated || !selectedTripId) return;
+    const next = completedAttractionIds.includes(attractionId)
+      ? completedAttractionIds.filter((id) => id !== attractionId)
+      : [...completedAttractionIds, attractionId];
+    try {
+      const saved = await saveCompletedActivities(selectedTripId, next, itineraryRevision);
+      setCompletedAttractionIds(saved.completed_attraction_ids);
+      setWeatherProposal(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not save completed activity.");
+    }
+  };
+  const acceptProposal = async () => {
+    if (!selectedTripId || !weatherProposal) return;
+    try {
+      const saved = await acceptWeatherReplan(selectedTripId, weatherProposal);
+      setGenerated(
+        saved.latest_itinerary,
+        generatedDestination ?? "Saved trip",
+        alternatives,
+        planningAttractions,
+        planningStartLocation ?? [26.9124, 75.7873],
+        planningBudget ?? 0,
+        annealing,
+      );
+      itineraryRevisionsByTrip.current.set(selectedTripId, saved.itinerary_revision);
+      setItineraryRevision(saved.itinerary_revision);
+      setCompletedAttractionIds(saved.completed_attraction_ids);
+      resolvedWeatherProposalIds.current.add(weatherProposal.proposal_id);
+      setWeatherProposal(null);
+      toast.success("Itinerary updated based on the weather forecast.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not accept the proposed revision.",
+      );
+    }
+  };
+  const rejectProposal = async () => {
+    if (!selectedTripId || !weatherProposal) return;
+    try {
+      await rejectWeatherReplan(selectedTripId, weatherProposal);
+      resolvedWeatherProposalIds.current.add(weatherProposal.proposal_id);
+      setWeatherProposal(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not dismiss the proposal.");
     }
   };
   const assessReliability = async () => {
@@ -276,6 +480,17 @@ function Itinerary() {
     travelTime: `${day.total_travel_minutes} min`,
     distance: `${day.reserved_break_minutes} min meal/rest time`,
     hotel: "Accommodation is outside this baseline optimizer",
+    weatherSummary: day.stops.flatMap((stop) =>
+      stop.weather_assessment
+        ? [
+            {
+              name: stop.name,
+              scheduled_time: stop.weather_assessment.forecast_time,
+              risk: stop.weather_assessment,
+            },
+          ]
+        : [],
+    ),
     cost: day.total_cost,
     slots: [
       ...day.stops.map((stop) => ({
@@ -283,7 +498,7 @@ function Itinerary() {
         time: `${formatClock(stop.arrival_minute)}–${formatClock(stop.departure_minute)}`,
         attractionId: stop.attraction_id,
         title: stop.name,
-        detail: `${stop.departure_minute - stop.arrival_minute} min ${planningAttractions.find((item) => item.id === stop.attraction_id)?.visit_duration_known === false ? "planned (duration unknown; estimate)" : "visit"} · ${stop.travel_minutes_before} min estimated travel${stop.wait_minutes ? ` · ${stop.wait_minutes} min waiting${stop.wait_reason ? ` — ${stop.wait_reason}` : ""}` : ""}`,
+        detail: `${stop.departure_minute - stop.arrival_minute} min ${planningAttractions.find((item) => item.id === stop.attraction_id)?.visit_duration_known === false ? "planned (duration unknown; estimate)" : "visit"} · ${stop.travel_minutes_before} min estimated travel${stop.wait_minutes ? ` · ${stop.wait_minutes} min waiting${stop.wait_reason ? ` — ${stop.wait_reason}` : ""}` : ""}${stop.weather_assessment ? ` · Weather ${stop.weather_assessment["known"] === true ? `advisory: ${String(stop.weather_assessment["level"])}` : "data unavailable"}` : ""}`,
         cost: stop.cost,
       })),
       ...(day.stops.length > 0 ? day.meal_breaks : []).map((meal) => ({
@@ -334,6 +549,26 @@ function Itinerary() {
       planningAttractions
         .map((item) => item.attribution)
         .filter((value): value is string => Boolean(value)),
+    ),
+  ];
+  const weatherItems = weatherProposal?.weather_summary ?? [];
+  const fullWeatherCoverage =
+    Boolean(weatherProposal?.forecast_available) &&
+    weatherItems.length > 0 &&
+    weatherItems.every((item) => item.risk.known && item.risk.confidence === "forecast");
+  const weatherFieldLabels: Record<string, string> = {
+    precipitation_probability: "rain probability",
+    precipitation: "precipitation amount",
+    temperature_2m: "temperature",
+    apparent_temperature: "feels-like temperature",
+    wind_speed_10m: "wind speed",
+    weather_code: "weather condition",
+  };
+  const checkedWeatherConditions = [
+    ...new Set(
+      weatherItems.flatMap((item) =>
+        Object.keys(item.risk.variables).map((field) => weatherFieldLabels[field] ?? field),
+      ),
     ),
   ];
 
@@ -456,6 +691,16 @@ function Itinerary() {
                         {day.temp}
                       </Badge>
                     )}
+                    {selectedTripId ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={replanning || loadingTripList || loadingSavedTrip}
+                        onClick={() => checkWeatherForDay(day.day)}
+                      >
+                        {replanning ? "Checking…" : "Check weather"}
+                      </Button>
+                    ) : null}
                     <Badge variant="secondary">
                       <Clock className="mr-1 h-3 w-3" /> {day.travelTime}
                     </Badge>
@@ -464,6 +709,24 @@ function Itinerary() {
                     </Badge>
                   </div>
                 </header>
+
+                {day.weatherSummary.length > 0 ? (
+                  <section
+                    className="space-y-2 border-b border-border p-4"
+                    aria-label={`Weather forecast for Day ${day.day}`}
+                  >
+                    <h3 className="text-sm font-medium">Forecast for scheduled activities</h3>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {day.weatherSummary.map((item) => (
+                        <WeatherForecastCard key={item.name} item={item} />
+                      ))}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Open-Meteo · Weather data by Open-Meteo.com (CC BY 4.0) · Forecast values are
+                      estimates, not guarantees.
+                    </p>
+                  </section>
+                ) : null}
 
                 <div className="divide-y divide-border">
                   {day.slots.map((slot) => (
@@ -491,13 +754,8 @@ function Itinerary() {
                           <Button
                             size="sm"
                             variant="outline"
-                            onClick={() =>
-                              setCompletedAttractionIds((current) =>
-                                current.includes(slot.attractionId!)
-                                  ? current.filter((id) => id !== slot.attractionId)
-                                  : [...current, slot.attractionId!],
-                              )
-                            }
+                            disabled={loadingTripList || loadingSavedTrip}
+                            onClick={() => void toggleCompleted(slot.attractionId!)}
                           >
                             {completedAttractionIds.includes(slot.attractionId)
                               ? "Undo"
@@ -529,6 +787,147 @@ function Itinerary() {
             </motion.li>
           ))}
         </ol>
+
+        {weatherUnavailableDay !== null ? (
+          <section className="surface border border-border p-4" role="status">
+            <p className="font-medium">Weather information unavailable</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              We could not retrieve a usable forecast for Day {weatherUnavailableDay}. Your saved
+              itinerary is unchanged.
+            </p>
+          </section>
+        ) : null}
+
+        {weatherProposal ? (
+          <section className="surface space-y-3 p-5" aria-label="Weather-aware itinerary proposal">
+            <div>
+              <h2 className="font-semibold">
+                Forecast-based proposal · Day {weatherProposal.day_number}
+              </h2>
+              <p className="text-xs text-muted-foreground">
+                {weatherProposal.provider} · forecast updated{" "}
+                {formatForecastTimestamp(weatherProposal.retrieved_at)} ·{" "}
+                {weatherProposal.attribution}
+              </p>
+            </div>
+            {!weatherProposal.forecast_available ? (
+              <p className="text-sm">
+                Weather information unavailable. This itinerary has not been assessed for weather
+                suitability.
+              </p>
+            ) : null}
+            {weatherProposal.forecast_available ? (
+              <div className="grid gap-2 sm:grid-cols-2">
+                {weatherProposal.weather_summary.map((item) => (
+                  <WeatherForecastCard key={item.attraction_id} item={item} />
+                ))}
+              </div>
+            ) : null}
+            {weatherProposal.changes.length ? (
+              <div className="space-y-2">
+                {weatherProposal.changes.map((change, index) => (
+                  <div
+                    key={`${String(change.original["attraction_id"])}-${index}`}
+                    className="rounded-md border border-border p-3"
+                  >
+                    <p className="font-medium">{String(change.original["name"] ?? "Activity")}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {change.weather_risk?.condition ?? "Forecast condition unavailable"}
+                      {change.weather_risk?.forecast_time
+                        ? ` · ${formatForecastTimestamp(change.weather_risk.forecast_time)}`
+                        : ""}
+                    </p>
+                    {(change.weather_risk?.advisories ?? []).map((advisory, advisoryIndex) => (
+                      <div key={`${advisory.type}-${advisoryIndex}`} className="mt-2 text-sm">
+                        <p className="font-medium">{advisoryLabel(advisory.type)}</p>
+                        <p className="text-xs text-muted-foreground">{advisory.description}</p>
+                      </div>
+                    ))}
+                    <p className="mt-2 text-xs text-muted-foreground">{change.reason}</p>
+                    <p className="mt-1 text-xs font-medium">
+                      {change.status === "replaced"
+                        ? `Alternative found: ${String(change.revised["name"] ?? "indoor activity")}.`
+                        : "No suitable alternative was found; the original activity remains in the plan."}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-md bg-muted/50 p-3">
+                {!weatherProposal.forecast_available ? (
+                  <p className="text-sm font-medium">Weather information unavailable.</p>
+                ) : fullWeatherCoverage ? (
+                  <>
+                    <p className="text-sm font-medium">
+                      {weatherProposal.weather_summary.some(
+                        (item) => item.risk.outdoor_suitability_assumed,
+                      )
+                        ? "Weather conditions look suitable for your scheduled outdoor activities. No changes are currently recommended."
+                        : "No weather-driven changes are currently recommended for your scheduled activities."}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Conditions checked:{" "}
+                      {checkedWeatherConditions.join(", ") || "available hourly forecast values"}.
+                      Forecasts are estimates; conditions can change.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-sm font-medium">
+                      No changes are currently recommended based on the available forecast values.
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Forecast coverage is partial for one or more activities. Missing values were
+                      not treated as zero, so suitability could not be fully assessed.
+                    </p>
+                  </>
+                )}
+              </div>
+            )}
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="rounded-md border border-border p-3">
+                <h3 className="text-sm font-medium">Original plan</h3>
+                {weatherProposal.original_stops.map((stop) => (
+                  <p key={stop.attraction_id} className="mt-1 text-xs text-muted-foreground">
+                    {formatClock(stop.arrival_minute)} · {stop.name}
+                    {completedAttractionIds.includes(stop.attraction_id) ? " · completed" : ""}
+                  </p>
+                ))}
+              </div>
+              <div className="rounded-md border border-border p-3">
+                <h3 className="text-sm font-medium">Proposed plan</h3>
+                {weatherProposal.revised_stops.map((stop) => (
+                  <p key={stop.attraction_id} className="mt-1 text-xs text-muted-foreground">
+                    {formatClock(stop.arrival_minute)} · {stop.name}
+                    {completedAttractionIds.includes(stop.attraction_id) ? " · completed" : ""}
+                  </p>
+                ))}
+              </div>
+            </div>
+            {weatherProposal.warnings.map((warning) => (
+              <p key={warning} className="text-xs text-muted-foreground">
+                {warning}
+              </p>
+            ))}
+            <p className="text-xs text-muted-foreground">
+              Estimated change: {weatherProposal.additional_travel_minutes} travel min · ₹
+              {weatherProposal.additional_cost.toLocaleString("en-IN")} ·{" "}
+              {weatherProposal.within_budget ? "within budget estimate" : "over budget estimate"}
+            </p>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                disabled={!weatherProposal.can_accept}
+                onClick={() => void acceptProposal()}
+              >
+                Accept revision
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => void rejectProposal()}>
+                Keep current itinerary
+              </Button>
+            </div>
+          </section>
+        ) : null}
 
         <aside className="space-y-4 lg:sticky lg:top-24 lg:self-start">
           <div className="surface space-y-2 p-5">
@@ -698,6 +1097,62 @@ function Itinerary() {
                   ) : null}
                 </div>
               ) : null}
+
+              {weatherProposal ? (
+                <section
+                  className="surface space-y-3 p-5"
+                  aria-label="Advanced weather proposal detail"
+                >
+                  <div>
+                    <h2 className="font-semibold">Forecast assessment details</h2>
+                    <p className="text-xs text-muted-foreground">
+                      {weatherProposal.provider} · {weatherProposal.attribution} · fetched{" "}
+                      {new Date(weatherProposal.retrieved_at).toLocaleString()}
+                    </p>
+                  </div>
+                  {!weatherProposal.forecast_available ? (
+                    <p className="text-sm">
+                      Weather data unavailable for scheduled activities; no risk value was assumed.
+                    </p>
+                  ) : null}
+                  <div className="space-y-2 text-sm">
+                    {weatherProposal.changes.map((change, index) => (
+                      <div
+                        key={`${String(change.original["attraction_id"])}-${index}`}
+                        className="rounded-md border border-border p-3"
+                      >
+                        <p className="font-medium">
+                          {change.status}: {String(change.original["name"] ?? "Activity")}
+                          {change.status === "replaced"
+                            ? ` → ${String(change.revised["name"] ?? "alternative")}`
+                            : ""}
+                        </p>
+                        <p className="text-xs text-muted-foreground">{change.reason}</p>
+                      </div>
+                    ))}
+                  </div>
+                  {weatherProposal.warnings.map((warning) => (
+                    <p key={warning} className="text-xs text-muted-foreground">
+                      {warning}
+                    </p>
+                  ))}
+                  <p className="text-xs text-muted-foreground">
+                    Estimated change: {weatherProposal.additional_travel_minutes} travel min · ₹
+                    {weatherProposal.additional_cost.toLocaleString("en-IN")} ·{" "}
+                    {weatherProposal.within_budget
+                      ? "within budget estimate"
+                      : "over budget estimate"}
+                  </p>
+                  <div className="text-xs text-muted-foreground">
+                    <p>Forecast assessment coverage</p>
+                    <p className="mt-1">
+                      {weatherItems.filter((item) => item.risk.known).length} of{" "}
+                      {weatherItems.length} activities had enough available data for a weather
+                      assessment. Crowd and availability remain separate risk dimensions.
+                    </p>
+                  </div>
+                </section>
+              ) : null}
               {generated ? (
                 <div className="surface space-y-3 p-5">
                   <div>
@@ -721,50 +1176,6 @@ function Itinerary() {
                       Skip similar
                     </Button>
                   </div>
-                </div>
-              ) : null}
-              {generated ? (
-                <div className="surface space-y-3 p-5">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <h2 className="font-semibold">Planning conditions</h2>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        Risk inputs used by this plan.
-                      </p>
-                    </div>
-                    <Button size="sm" variant="outline" onClick={inspectConditions}>
-                      Inspect
-                    </Button>
-                  </div>
-                  {conditions ? (
-                    <div className="max-h-72 space-y-2 overflow-auto text-xs text-muted-foreground">
-                      <p>
-                        Source:{" "}
-                        <span className="font-medium text-foreground">{conditions.source}</span> ·{" "}
-                        {conditions.conditions.length} attraction snapshots
-                      </p>
-                      {conditions.conditions.map((condition) => (
-                        <p key={condition.attraction_id}>
-                          {condition.attraction_id}:{" "}
-                          {[
-                            ["Weather", condition.weather_risk, condition.weather_risk_known],
-                            ["Crowd", condition.crowd_risk, condition.crowd_risk_known],
-                            [
-                              "Availability",
-                              condition.availability_risk,
-                              condition.availability_risk_known,
-                            ],
-                          ]
-                            .map(
-                              ([label, value, known]) =>
-                                `${label}: ${known ? `${Math.round(Number(value) * 100)}%` : "unknown"}`,
-                            )
-                            .join(" · ")}{" "}
-                          · {condition.risk_data_status}
-                        </p>
-                      ))}
-                    </div>
-                  ) : null}
                 </div>
               ) : null}
               {alternatives.length > 0 ? (
@@ -820,7 +1231,7 @@ function Itinerary() {
                   <div>
                     <h2 className="font-semibold">What-if replanning</h2>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      Scenario inputs use synthetic estimates.
+                      Simulated what-if inputs use synthetic estimates and are not actual forecasts.
                     </p>
                   </div>
                   <div className="grid grid-cols-2 gap-2">
