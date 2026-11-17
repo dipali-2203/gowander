@@ -128,6 +128,24 @@ class AttractionInput(BaseModel):
     fatigue_score: float = Field(default=0.5, ge=0, le=1)
     opening_minute: int = Field(default=540, ge=0, le=1439)
     closing_minute: int = Field(default=1020, ge=1, le=1440)
+    # Optional provenance accompanies the stable optimizer fields. Legacy callers
+    # can omit every metadata field without changing optimizer behavior.
+    cost_known: bool | None = None
+    catalog_category: str | None = Field(default=None, max_length=50)
+    opening_hours: str | None = Field(default=None, max_length=500)
+    opening_window_known: bool | None = None
+    visit_duration_known: bool | None = None
+    data_source: str | None = Field(default=None, max_length=30)
+    provider_name: str | None = Field(default=None, max_length=40)
+    external_provider_id: str | None = Field(default=None, max_length=120)
+    source_url: str | None = Field(default=None, max_length=500)
+    license_name: str | None = Field(default=None, max_length=80)
+    attribution: str | None = Field(default=None, max_length=250)
+    verification_status: str | None = Field(default=None, max_length=30)
+    last_fetched_at: str | None = Field(default=None, max_length=50)
+    last_verified_at: str | None = Field(default=None, max_length=50)
+    data_freshness: str | None = Field(default=None, max_length=20)
+    raw_tags: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_opening_window(self):
@@ -173,7 +191,7 @@ class ConfirmedActivity(BaseModel):
 class MultiDayOptimizeRequest(OptimizeRequest):
     meal_breaks: list[MealBreak] = Field(default_factory=list)
     confirmed_activities: list[ConfirmedActivity] = Field(default_factory=list)
-    data_source: Literal["synthetic", "user_supplied"] = "user_supplied"
+    data_source: Literal["synthetic", "user_supplied", "osm"] = "user_supplied"
 
 class ReplanRequest(BaseModel):
     current_latitude: float = Field(ge=-90, le=90)
@@ -196,7 +214,7 @@ class Disruption(BaseModel):
 class ScenarioReplanRequest(ReplanRequest):
     attractions: list[AttractionInput] = Field(min_length=1)
     disruptions: list[Disruption] = Field(default_factory=list)
-    data_source: Literal["synthetic", "user_supplied"] = "user_supplied"
+    data_source: Literal["synthetic", "user_supplied", "osm"] = "user_supplied"
     previous_planned_attraction_ids: list[str] = Field(default_factory=list)
     closed_attraction_ids: list[str] = Field(
         default_factory=list
@@ -225,7 +243,7 @@ class ItineraryResponse(BaseModel):
     risk_score: float
     feasible: bool
     warnings: list[str]
-    data_source: Literal["synthetic", "user_supplied"] = "user_supplied"
+    data_source: Literal["synthetic", "user_supplied", "osm"] = "user_supplied"
 
 
 class ReplanResponse(ItineraryResponse):
@@ -267,7 +285,7 @@ class MultiDayItineraryResponse(BaseModel):
     risk_score: float
     feasible: bool
     warnings: list[str]
-    data_source: Literal["synthetic", "user_supplied"]
+    data_source: Literal["synthetic", "user_supplied", "osm"]
     budget_estimate: dict | None = None
 
 

@@ -1,14 +1,5 @@
 import { motion } from "motion/react";
-import {
-  Star,
-  Clock,
-  CalendarDays,
-  Ticket,
-  Plus,
-  Sparkles,
-  Bookmark,
-  BookmarkCheck,
-} from "lucide-react";
+import { Clock, CalendarDays, Plus, Sparkles, Bookmark, BookmarkCheck } from "lucide-react";
 import type { Destination } from "@/data/destinations";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -66,22 +57,14 @@ export function DestinationCard({
             <h3 className="truncate text-base font-semibold">{destination.name}</h3>
             <p className="truncate text-sm text-muted-foreground">{destination.state}</p>
           </div>
-          <span className="flex shrink-0 items-center gap-1 rounded-full bg-muted px-2 py-1 text-xs font-medium">
-            <Star className="h-3.5 w-3.5 fill-amber text-amber" />
-            {destination.rating}
-          </span>
         </div>
 
         <p className="line-clamp-2 text-sm text-muted-foreground">{destination.description}</p>
 
-        <dl className="grid grid-cols-3 gap-2 text-xs text-muted-foreground">
+        <dl className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
           <div className="flex items-center gap-1">
             <CalendarDays className="h-3.5 w-3.5 shrink-0" />
             <span className="truncate">{destination.bestTime}</span>
-          </div>
-          <div className="flex items-center gap-1">
-            <Ticket className="h-3.5 w-3.5 shrink-0" />
-            <span className="truncate">{destination.entryFee}</span>
           </div>
           <div className="flex items-center gap-1">
             <Clock className="h-3.5 w-3.5 shrink-0" />

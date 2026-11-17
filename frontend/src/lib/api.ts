@@ -12,6 +12,32 @@ export type AttractionInput = {
   availability_risk: number;
   opening_minute: number;
   closing_minute: number;
+  cost_known?: boolean;
+  catalog_category?: string | null;
+  opening_hours?: string | null;
+  opening_window_known?: boolean;
+  visit_duration_known?: boolean;
+  data_source?: string | null;
+  provider_name?: string | null;
+  external_provider_id?: string | null;
+  source_url?: string | null;
+  license_name?: string | null;
+  attribution?: string | null;
+  verification_status?: string | null;
+  last_fetched_at?: string | null;
+  last_verified_at?: string | null;
+  data_freshness?: string | null;
+  raw_tags?: Record<string, string>;
+};
+
+export type AttractionCatalog = {
+  destination: string;
+  data_source: "osm" | "synthetic" | "user_supplied" | "mixed" | "unavailable";
+  catalog_status: "available" | "synthetic_fallback" | "not_ingested";
+  message: string | null;
+  start_location: [number, number] | null;
+  attribution: string | null;
+  attractions: AttractionInput[];
 };
 
 export type GeneratedItinerary = {
@@ -46,7 +72,7 @@ export type GeneratedItinerary = {
   risk_score: number;
   feasible: boolean;
   warnings: string[];
-  data_source: "synthetic" | "user_supplied";
+  data_source: "synthetic" | "user_supplied" | "osm";
   budget_estimate?: TripBudgetEstimate | null;
 };
 
@@ -58,6 +84,8 @@ export type TripBudgetEstimate = {
   budget_limit: number;
   remaining_budget: number;
   within_budget: boolean;
+  is_complete: boolean;
+  unknown_attraction_fee_count: number;
   categories: Array<{
     key: string;
     label: string;
@@ -200,7 +228,7 @@ export type TripDetails = AccountTrip & {
       day_number: number;
       start_minute: number;
     }>;
-    data_source: "synthetic" | "user_supplied";
+    data_source: "synthetic" | "user_supplied" | "osm";
   } | null;
 };
 
@@ -334,6 +362,12 @@ export async function getTrip(tripId: number) {
   return request<TripDetails>(`/api/v1/trips/${tripId}`);
 }
 
+export function getAttractionCatalog(destination: string) {
+  return request<AttractionCatalog>(
+    `/api/v1/attractions/catalog/${encodeURIComponent(destination)}`,
+  );
+}
+
 export async function updateTrip(
   tripId: number,
   input: Partial<
@@ -411,11 +445,15 @@ export async function createAndOptimizeTrip(input: {
 }): Promise<PlanningResult> {
   const catalog = await request<{
     attractions: AttractionInput[];
-    data_source: "synthetic";
+    data_source: "osm" | "synthetic" | "user_supplied" | "mixed" | "unavailable";
+    catalog_status: AttractionCatalog["catalog_status"];
+    message: string | null;
     start_location: [number, number] | null;
   }>(`/api/v1/attractions/catalog/${encodeURIComponent(input.destination)}`);
   if (catalog.attractions.length === 0) {
-    throw new Error(`No local planning catalog is available for ${input.destination} yet.`);
+    throw new Error(
+      catalog.message ?? `No attraction catalog is available for ${input.destination} yet.`,
+    );
   }
   const [startLatitude, startLongitude] = catalog.start_location ?? [26.9124, 75.7873];
 
@@ -483,7 +521,7 @@ export async function createAndOptimizeTrip(input: {
       body: JSON.stringify({
         attractions: catalog.attractions,
         algorithm: "greedy",
-        data_source: "synthetic",
+        data_source: catalog.data_source === "mixed" ? "user_supplied" : catalog.data_source,
         meal_breaks: [{ start_minute: 780, duration_minutes: 60 }],
         confirmed_activities: [],
       }),

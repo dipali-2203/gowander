@@ -289,6 +289,13 @@ function Itinerary() {
       source: generated.data_source,
     },
   ];
+  const attributions = [
+    ...new Set(
+      planningAttractions
+        .map((item) => item.attribution)
+        .filter((value): value is string => Boolean(value)),
+    ),
+  ];
 
   return (
     <div className="space-y-6">
@@ -316,6 +323,12 @@ function Itinerary() {
           </>
         }
       />
+
+      {attributions.map((attribution) => (
+        <p key={attribution} className="text-xs text-muted-foreground">
+          Attraction data attribution: {attribution}
+        </p>
+      ))}
 
       {savedTrips.length > 0 ? (
         <label className="flex flex-wrap items-center gap-3 text-sm">
@@ -468,6 +481,13 @@ function Itinerary() {
             </p>
             {budgetEstimate ? (
               <div className="space-y-1 text-xs text-muted-foreground">
+                {!budgetEstimate.is_complete && (
+                  <p className="font-medium text-amber-700">
+                    Incomplete estimate: {budgetEstimate.unknown_attraction_fee_count} scheduled
+                    attraction fee(s) are unknown; the optimizer uses a zero-cost placeholder for
+                    those entries.
+                  </p>
+                )}
                 <p>
                   Estimated per person: ₹{budgetEstimate.per_person.toLocaleString("en-IN")} · daily
                   average: ₹{budgetEstimate.daily_average.toLocaleString("en-IN")}

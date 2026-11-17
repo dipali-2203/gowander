@@ -46,6 +46,10 @@ def estimate_trip_budget(
     by_id = {item.id: item for item in attractions}
 
     attraction_cost = round(sum(day["total_cost"] for day in days), 2)
+    scheduled_ids = {stop.attraction_id for day in days for stop in day.get("stops", [])}
+    unknown_attraction_fees = sum(
+        1 for item in attractions if item.id in scheduled_ids and item.cost_known is False
+    )
     route_km = 0.0
     journey_count = 0
     for day in days:
@@ -138,6 +142,8 @@ def estimate_trip_budget(
         "budget_limit": budget_limit,
         "remaining_budget": round(budget_limit - total, 2),
         "within_budget": total <= budget_limit + 1e-9,
+        "is_complete": unknown_attraction_fees == 0,
+        "unknown_attraction_fee_count": unknown_attraction_fees,
         "categories": categories,
         "exclusions": [
             "Attraction fees use supplied catalog values; omitted fee fields may default to ₹0 and should be verified.",

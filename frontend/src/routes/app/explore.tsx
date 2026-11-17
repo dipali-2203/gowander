@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { Search, Sparkles, Star, X, Plus, Bookmark, BookmarkCheck } from "lucide-react";
+import { Search, Sparkles, X, Plus, Bookmark, BookmarkCheck } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/travel/PageHeader";
 import { DestinationCard } from "@/components/travel/DestinationCard";
@@ -18,7 +18,13 @@ import {
 } from "@/components/ui/select";
 import { destinations, states, categories, type Destination } from "@/data/destinations";
 import { useTripStore } from "@/store/trip";
-import { addBookmark, getBookmarks, removeBookmark } from "@/lib/api";
+import {
+  addBookmark,
+  getAttractionCatalog,
+  getBookmarks,
+  removeBookmark,
+  type AttractionCatalog,
+} from "@/lib/api";
 
 export const Route = createFileRoute("/app/explore")({
   head: () => ({
@@ -50,6 +56,9 @@ function Explore() {
   const [active, setActive] = useState<Destination | null>(null);
   const [bookmarkedIds, setBookmarkedIds] = useState<string[]>([]);
   const [bookmarkBusy, setBookmarkBusy] = useState<string | null>(null);
+  const [attractionCity, setAttractionCity] = useState("jaipur");
+  const [attractionCatalog, setAttractionCatalog] = useState<AttractionCatalog | null>(null);
+  const [attractionLoading, setAttractionLoading] = useState(true);
   const add = useTripStore((s) => s.add);
 
   useEffect(() => {
@@ -59,6 +68,24 @@ function Explore() {
         toast.error("Could not load your saved destinations.");
       });
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    setAttractionLoading(true);
+    getAttractionCatalog(attractionCity)
+      .then((catalog) => {
+        if (active) setAttractionCatalog(catalog);
+      })
+      .catch(() => {
+        if (active) setAttractionCatalog(null);
+      })
+      .finally(() => {
+        if (active) setAttractionLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [attractionCity]);
 
   const results = useMemo(
     () =>
@@ -115,6 +142,106 @@ function Explore() {
         description="Pan the map, filter by what you actually care about, and build a shortlist."
       />
 
+      <section className="surface space-y-4 p-5" aria-labelledby="attraction-catalog-title">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 id="attraction-catalog-title" className="text-lg font-semibold">
+              Attraction catalog
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              Provider data and verification status are shown with each place.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            {["jaipur", "udaipur"].map((city) => (
+              <Button
+                key={city}
+                size="sm"
+                variant={attractionCity === city ? "default" : "outline"}
+                onClick={() => setAttractionCity(city)}
+              >
+                {city[0]?.toUpperCase()}
+                {city.slice(1)}
+              </Button>
+            ))}
+          </div>
+        </div>
+        {attractionLoading ? (
+          <p className="text-sm text-muted-foreground">Loading saved catalog…</p>
+        ) : !attractionCatalog ? (
+          <p className="text-sm text-muted-foreground">
+            Could not load this destination's catalog.
+          </p>
+        ) : (
+          <>
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <Badge variant="secondary">
+                {attractionCatalog.data_source === "osm"
+                  ? "OpenStreetMap"
+                  : attractionCatalog.data_source}
+              </Badge>
+              <Badge variant="secondary">
+                {attractionCatalog.catalog_status.replaceAll("_", " ")}
+              </Badge>
+              {attractionCatalog.attribution && (
+                <span className="text-muted-foreground">{attractionCatalog.attribution}</span>
+              )}
+            </div>
+            {attractionCatalog.message && (
+              <p className="text-sm text-amber-700">{attractionCatalog.message}</p>
+            )}
+            {attractionCatalog.attractions.length ? (
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {attractionCatalog.attractions.map((place) => (
+                  <article key={place.id} className="rounded-xl border border-border p-4">
+                    <h3 className="font-medium">{place.name}</h3>
+                    <p className="mt-1 text-xs capitalize text-muted-foreground">
+                      {place.catalog_category ?? place.category}
+                    </p>
+                    <p className="mt-2 text-xs">
+                      {place.latitude.toFixed(5)}, {place.longitude.toFixed(5)}
+                    </p>
+                    <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+                      <dt className="text-muted-foreground">Hours</dt>
+                      <dd>{place.opening_hours ?? "Not available"}</dd>
+                      <dt className="text-muted-foreground">Entry fee</dt>
+                      <dd>{place.cost_known ? `₹${place.cost}` : "Unknown"}</dd>
+                      <dt className="text-muted-foreground">Visit duration</dt>
+                      <dd>
+                        {place.visit_duration_known ? `${place.visit_minutes} min` : "Unverified"}
+                      </dd>
+                      <dt className="text-muted-foreground">Verification</dt>
+                      <dd>{(place.verification_status ?? "unknown").replaceAll("_", " ")}</dd>
+                      <dt className="text-muted-foreground">Freshness</dt>
+                      <dd>{place.data_freshness ?? "unknown"}</dd>
+                    </dl>
+                    <div className="mt-3 flex justify-between gap-2 text-xs">
+                      <span className="text-muted-foreground">
+                        Source: {place.provider_name ?? place.data_source ?? "unknown"}
+                      </span>
+                      {place.source_url && (
+                        <a
+                          className="text-primary underline"
+                          href={place.source_url}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Source record
+                        </a>
+                      )}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                No imported attraction records are available for this city.
+              </p>
+            )}
+          </>
+        )}
+      </section>
+
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]">
         <div className="relative h-[420px] xl:sticky xl:top-24 xl:h-[calc(100dvh-140px)]">
           <div className="surface h-full overflow-hidden p-2">
@@ -151,11 +278,7 @@ function Explore() {
                   </div>
                   <p className="line-clamp-2 text-xs text-muted-foreground">{active.description}</p>
                   <div className="flex flex-wrap items-center gap-2 text-xs">
-                    <span className="flex items-center gap-1 font-medium">
-                      <Star className="h-3.5 w-3.5 fill-amber text-amber" /> {active.rating}
-                    </span>
                     <Badge variant="secondary">{active.bestTime}</Badge>
-                    <Badge variant="secondary">{active.entryFee}</Badge>
                     <Badge variant="secondary">{active.duration}</Badge>
                   </div>
                   <div className="flex gap-2">

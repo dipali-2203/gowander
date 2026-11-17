@@ -138,3 +138,42 @@ def migrate_user_profile_schema() -> None:
             ))
         if "travel_preferences" not in columns:
             connection.execute(text("ALTER TABLE users ADD COLUMN travel_preferences JSON NOT NULL DEFAULT '{}'"))
+
+
+def migrate_attraction_catalog_schema() -> None:
+    """Add provider and verification metadata without rebuilding attraction rows."""
+    inspector = inspect(engine)
+    if "attractions" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("attractions")}
+    datetime_type = "DATETIME" if engine.dialect.name == "sqlite" else "TIMESTAMP WITH TIME ZONE"
+    additions = {
+        "provider_name": "VARCHAR(40)",
+        "source_dataset": "VARCHAR(160)",
+        "external_provider_id": "VARCHAR(120)",
+        "source_url": "VARCHAR(500)",
+        "license_name": "VARCHAR(80)",
+        "attribution": "VARCHAR(250)",
+        "last_fetched_at": datetime_type,
+        "last_verified_at": datetime_type,
+        "data_freshness": "VARCHAR(20) NOT NULL DEFAULT 'unknown'",
+        "verification_status": "VARCHAR(30) NOT NULL DEFAULT 'unverified'",
+        "data_confidence": "FLOAT",
+        "raw_tags": "JSON NOT NULL DEFAULT '{}'",
+        "opening_hours": "VARCHAR(500)",
+        "entrance_fee": "FLOAT",
+        "entrance_fee_currency": "VARCHAR(3)",
+        "visit_duration_minutes": "INTEGER",
+        "curated_opening_hours": "VARCHAR(500)",
+        "curated_entrance_fee": "FLOAT",
+        "curated_visit_duration_minutes": "INTEGER",
+        "verification_notes": "VARCHAR(500)",
+    }
+    with engine.begin() as connection:
+        for name, definition in additions.items():
+            if name not in columns:
+                connection.execute(text(f"ALTER TABLE attractions ADD COLUMN {name} {definition}"))
+        connection.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_attractions_external_provider_id "
+            "ON attractions (external_provider_id)"
+        ))

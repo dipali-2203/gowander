@@ -117,8 +117,11 @@ class Attraction(Base):
     latitude: Mapped[float] = mapped_column(Float)
     longitude: Mapped[float] = mapped_column(Float)
 
+    # Legacy optimizer projections. Provider imports keep unknown values here as
+    # neutral planning defaults while the nullable source/curated fields below
+    # remain authoritative for display and provenance.
     cost: Mapped[float] = mapped_column(Float, default=0.0)
-    visit_minutes: Mapped[int] = mapped_column(Integer)
+    visit_minutes: Mapped[int] = mapped_column(Integer, default=60)
 
     preference_score: Mapped[float] = mapped_column(Float, default=0.5)
     weather_risk: Mapped[float] = mapped_column(Float, default=0.0)
@@ -128,3 +131,36 @@ class Attraction(Base):
     closing_minute: Mapped[int] = mapped_column(Integer, default=1020)
     data_source: Mapped[str] = mapped_column(String(30), default="user_supplied")
     fatigue_score: Mapped[float] = mapped_column(Float, default=0.5)
+    provider_name: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    source_dataset: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    external_provider_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    source_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    license_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    attribution: Mapped[str | None] = mapped_column(String(250), nullable=True)
+    last_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    data_freshness: Mapped[str] = mapped_column(String(20), default="unknown", nullable=False)
+    verification_status: Mapped[str] = mapped_column(String(30), default="unverified", nullable=False)
+    data_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    raw_tags: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    opening_hours: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    entrance_fee: Mapped[float | None] = mapped_column(Float, nullable=True)
+    entrance_fee_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    visit_duration_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    curated_opening_hours: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    curated_entrance_fee: Mapped[float | None] = mapped_column(Float, nullable=True)
+    curated_visit_duration_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    verification_notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+
+class AttractionIngestionJob(Base):
+    __tablename__ = "attraction_ingestion_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    destination: Mapped[str] = mapped_column(String(100), index=True)
+    provider_name: Mapped[str] = mapped_column(String(40), default="openstreetmap")
+    status: Mapped[str] = mapped_column(String(20), default="running", index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    summary: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)

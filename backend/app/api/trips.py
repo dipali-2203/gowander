@@ -84,6 +84,22 @@ def _build_saved_multiday_plan(trip: Trip, request: MultiDayOptimizeRequest):
             "Estimated accommodation, meals, and miscellaneous costs use the full trip budget, leaving no attraction budget."
         )
         result["feasible"] = False
+    scheduled_ids = {stop.attraction_id for day in result["days"] for stop in day["stops"]}
+    unknown_fees = [item.name for item in request.attractions if item.id in scheduled_ids and item.cost_known is False]
+    unknown_hours = [item.name for item in request.attractions if item.id in scheduled_ids and item.opening_window_known is False]
+    unknown_durations = [item.name for item in request.attractions if item.id in scheduled_ids and item.visit_duration_known is False]
+    if unknown_fees:
+        result["warnings"].append(
+            f"Entrance fees are unknown for {len(unknown_fees)} scheduled attraction(s); the numeric optimizer used a zero-cost placeholder. Verify fees before relying on the budget fit."
+        )
+    if unknown_hours:
+        result["warnings"].append(
+            f"Opening hours are not usable as schedule constraints for {len(unknown_hours)} scheduled attraction(s); the optimizer used an all-day window."
+        )
+    if unknown_durations:
+        result["warnings"].append(
+            f"Visit duration is unverified for {len(unknown_durations)} scheduled attraction(s); the optimizer used a 60-minute planning placeholder."
+        )
     return result
 
 

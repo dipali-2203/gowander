@@ -11,13 +11,14 @@ from app.api.trips import router
 from app.api.attractions import router as attractions_router
 from app.api.auth import router as auth_router
 from app.api.account import router as account_router
-from app.database import Base, engine, migrate_auth_schema, migrate_sqlite_schema, migrate_user_profile_schema
+from app.database import Base, engine, migrate_attraction_catalog_schema, migrate_auth_schema, migrate_sqlite_schema, migrate_user_profile_schema
 from app import models  # Register SQLAlchemy models
 
 Base.metadata.create_all(bind=engine)
 migrate_sqlite_schema()
 migrate_auth_schema()
 migrate_user_profile_schema()
+migrate_attraction_catalog_schema()
 
 app = FastAPI(
     title="Personalized Risk-Aware Trip Optimization API",

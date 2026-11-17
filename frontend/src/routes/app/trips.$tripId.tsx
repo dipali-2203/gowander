@@ -237,6 +237,13 @@ function TripDetailsPage() {
       })
     | null;
   const hasDaySchedule = Array.isArray(itinerary?.days);
+  const attributions = [
+    ...new Set(
+      (trip.planning_inputs?.attractions ?? [])
+        .map((item) => item.attribution)
+        .filter((value): value is string => Boolean(value)),
+    ),
+  ];
 
   return (
     <div className="space-y-6">
@@ -275,6 +282,12 @@ function TripDetailsPage() {
           </>
         }
       />
+
+      {attributions.map((attribution) => (
+        <p key={attribution} className="text-xs text-muted-foreground">
+          Attraction data attribution: {attribution}
+        </p>
+      ))}
 
       {trip.itinerary_stale ? (
         <div
