@@ -59,6 +59,9 @@ function Explore() {
   const [attractionCity, setAttractionCity] = useState("jaipur");
   const [attractionCatalog, setAttractionCatalog] = useState<AttractionCatalog | null>(null);
   const [attractionLoading, setAttractionLoading] = useState(true);
+  const [poiQuery, setPoiQuery] = useState("");
+  const [poiCategory, setPoiCategory] = useState("All");
+  const [browseAllPois, setBrowseAllPois] = useState(false);
   const add = useTripStore((s) => s.add);
 
   useEffect(() => {
@@ -135,6 +138,51 @@ function Explore() {
     }
   };
 
+  const onPoiBookmark = async (id: string, name: string) => {
+    if (bookmarkBusy) return;
+    setBookmarkBusy(id);
+    try {
+      if (bookmarkedIds.includes(id)) {
+        await removeBookmark(id);
+        setBookmarkedIds((current) => current.filter((item) => item !== id));
+        toast.success(`${name} removed from bookmarks`);
+      } else {
+        await addBookmark(id);
+        setBookmarkedIds((current) => [...current, id]);
+        toast.success(`${name} saved to bookmarks`);
+      }
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "Could not update your bookmarks.");
+    } finally {
+      setBookmarkBusy(null);
+    }
+  };
+
+  const poiCategories = [
+    "Park",
+    "Religious",
+    "Viewpoint",
+    "Cultural",
+    "Historical",
+    "Museum",
+    "Entertainment",
+    "Other",
+  ];
+  const poiResults = (attractionCatalog?.attractions ?? [])
+    .filter((place) => {
+      const placeCategory = (place.catalog_category ?? place.category).toLowerCase();
+      const q = poiQuery.trim().toLowerCase();
+      return (
+        (poiCategory === "All" || placeCategory === poiCategory.toLowerCase()) &&
+        (!q || place.name.toLowerCase().includes(q) || placeCategory.includes(q))
+      );
+    })
+    .sort(
+      (a, b) =>
+        (b.priority_score ?? b.preference_score) - (a.priority_score ?? a.preference_score) ||
+        a.name.localeCompare(b.name),
+    );
+
   return (
     <div className="space-y-5">
       <PageHeader
@@ -149,7 +197,8 @@ function Explore() {
               Attraction catalog
             </h2>
             <p className="text-sm text-muted-foreground">
-              Provider data and verification status are shown with each place.
+              Planning relevance uses category and available OSM tags. It is not popularity or a
+              rating.
             </p>
           </div>
           <div className="flex gap-2">
@@ -158,7 +207,12 @@ function Explore() {
                 key={city}
                 size="sm"
                 variant={attractionCity === city ? "default" : "outline"}
-                onClick={() => setAttractionCity(city)}
+                onClick={() => {
+                  setAttractionCity(city);
+                  setPoiQuery("");
+                  setPoiCategory("All");
+                  setBrowseAllPois(false);
+                }}
               >
                 {city[0]?.toUpperCase()}
                 {city.slice(1)}
@@ -191,47 +245,132 @@ function Explore() {
               <p className="text-sm text-amber-700">{attractionCatalog.message}</p>
             )}
             {attractionCatalog.attractions.length ? (
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {attractionCatalog.attractions.map((place) => (
-                  <article key={place.id} className="rounded-xl border border-border p-4">
-                    <h3 className="font-medium">{place.name}</h3>
-                    <p className="mt-1 text-xs capitalize text-muted-foreground">
-                      {place.catalog_category ?? place.category}
-                    </p>
-                    <p className="mt-2 text-xs">
-                      {place.latitude.toFixed(5)}, {place.longitude.toFixed(5)}
-                    </p>
-                    <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
-                      <dt className="text-muted-foreground">Hours</dt>
-                      <dd>{place.opening_hours ?? "Not available"}</dd>
-                      <dt className="text-muted-foreground">Entry fee</dt>
-                      <dd>{place.cost_known ? `₹${place.cost}` : "Unknown"}</dd>
-                      <dt className="text-muted-foreground">Visit duration</dt>
-                      <dd>
-                        {place.visit_duration_known ? `${place.visit_minutes} min` : "Unverified"}
-                      </dd>
-                      <dt className="text-muted-foreground">Verification</dt>
-                      <dd>{(place.verification_status ?? "unknown").replaceAll("_", " ")}</dd>
-                      <dt className="text-muted-foreground">Freshness</dt>
-                      <dd>{place.data_freshness ?? "unknown"}</dd>
-                    </dl>
-                    <div className="mt-3 flex justify-between gap-2 text-xs">
-                      <span className="text-muted-foreground">
-                        Source: {place.provider_name ?? place.data_source ?? "unknown"}
-                      </span>
-                      {place.source_url && (
-                        <a
-                          className="text-primary underline"
-                          href={place.source_url}
-                          target="_blank"
-                          rel="noreferrer"
+              <div className="space-y-4">
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Input
+                    aria-label="Search attractions"
+                    placeholder={`Search ${attractionCity} attractions`}
+                    value={poiQuery}
+                    onChange={(event) => setPoiQuery(event.target.value)}
+                  />
+                  <Button variant="outline" onClick={() => setBrowseAllPois((value) => !value)}>
+                    {browseAllPois
+                      ? "Show featured"
+                      : `Browse all ${attractionCatalog.attractions.length}`}
+                  </Button>
+                </div>
+                <div className="flex flex-wrap gap-2" aria-label="Attraction category filters">
+                  {["All", ...poiCategories].map((item) => {
+                    const count =
+                      item === "All"
+                        ? attractionCatalog.attractions.length
+                        : attractionCatalog.attractions.filter(
+                            (place) =>
+                              (place.catalog_category ?? place.category).toLowerCase() ===
+                              item.toLowerCase(),
+                          ).length;
+                    return (
+                      <Button
+                        key={item}
+                        size="sm"
+                        variant={poiCategory === item ? "default" : "outline"}
+                        onClick={() => {
+                          setPoiCategory(item);
+                          setBrowseAllPois(true);
+                        }}
+                      >
+                        {item} ({count})
+                      </Button>
+                    );
+                  })}
+                </div>
+                <h3 className="text-sm font-semibold">
+                  {browseAllPois || poiQuery || poiCategory !== "All"
+                    ? `${poiResults.length} matching attractions`
+                    : "Featured recommendations"}
+                </h3>
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {(browseAllPois || poiQuery || poiCategory !== "All"
+                    ? poiResults
+                    : poiResults.slice(0, 6)
+                  ).map((place) => (
+                    <article key={place.id} className="rounded-lg border border-border p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <h3 className="truncate text-sm font-medium">{place.name}</h3>
+                          <p className="text-xs capitalize text-muted-foreground">
+                            {place.catalog_category ?? place.category} · Planning relevance{" "}
+                            {Math.round((place.priority_score ?? place.preference_score) * 100)}%
+                          </p>
+                        </div>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          aria-label={`${bookmarkedIds.includes(place.id) ? "Remove" : "Save"} ${place.name} bookmark`}
+                          aria-pressed={bookmarkedIds.includes(place.id)}
+                          disabled={bookmarkBusy === place.id}
+                          onClick={() => void onPoiBookmark(place.id, place.name)}
                         >
-                          Source record
-                        </a>
-                      )}
-                    </div>
-                  </article>
-                ))}
+                          {bookmarkedIds.includes(place.id) ? (
+                            <BookmarkCheck className="h-4 w-4" />
+                          ) : (
+                            <Bookmark className="h-4 w-4" />
+                          )}
+                        </Button>
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Fee: {place.cost_known ? `₹${place.cost}` : "Unknown"} · Duration:{" "}
+                        {place.visit_duration_known ? `${place.visit_minutes} min` : "Unknown"}
+                      </p>
+                      <details className="mt-2 text-xs">
+                        <summary className="cursor-pointer text-primary">More data</summary>
+                        <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-2 gap-y-1">
+                          <dt>Hours</dt>
+                          <dd>{place.opening_window_known ? place.opening_hours : "Unknown"}</dd>
+                          <dt>Coordinates</dt>
+                          <dd>
+                            {place.latitude.toFixed(5)}, {place.longitude.toFixed(5)}
+                          </dd>
+                          <dt>Record</dt>
+                          <dd>
+                            {(place.verification_status ?? "unknown").replaceAll("_", " ")};{" "}
+                            {place.data_freshness ?? "freshness unknown"}
+                          </dd>
+                          <dt>Dataset</dt>
+                          <dd>{place.source_dataset ?? "Source dataset unknown"}</dd>
+                          <dt>License</dt>
+                          <dd>{place.license_name ?? "Unknown"}</dd>
+                          <dt>Recommendation basis</dt>
+                          <dd>
+                            {place.priority_reasons?.join("; ") ||
+                              "Category-based relevance heuristic"}
+                          </dd>
+                        </dl>
+                        {place.source_url && (
+                          <a
+                            className="mt-2 inline-block text-primary underline"
+                            href={place.source_url}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Open source record
+                          </a>
+                        )}
+                      </details>
+                    </article>
+                  ))}
+                </div>
+                {attractionCatalog.attribution && (
+                  <p className="text-xs text-muted-foreground">
+                    {attractionCatalog.attribution}. Dataset and license are shown with each
+                    attraction record.
+                  </p>
+                )}
+                {!poiResults.length && (
+                  <p className="text-sm text-muted-foreground">
+                    No attractions match this search or category.
+                  </p>
+                )}
               </div>
             ) : (
               <p className="text-sm text-muted-foreground">

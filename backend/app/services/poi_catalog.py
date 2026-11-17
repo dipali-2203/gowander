@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Attraction, AttractionIngestionJob
+from app.services.attraction_priority import attraction_priority
 
 
 OVERPASS_URL = "https://overpass.private.coffee/api/interpreter"
@@ -360,22 +361,30 @@ def to_optimizer_attraction(attraction: Attraction) -> dict[str, Any]:
         "park": "nature", "viewpoint": "nature", "cultural": "history",
         "entertainment": "entertainment", "other": "sightseeing",
     }.get(attraction.category.lower(), attraction.category.lower())
+    priority_score, priority_reasons = attraction_priority(
+        attraction.category, attraction.name, attraction.raw_tags or {}, attraction.verification_status
+    )
     planning_window = _parse_simple_hours(attraction.curated_opening_hours)
     if planning_window is None:
         planning_window = _parse_simple_hours(attraction.opening_hours)
+    assumed_duration = {
+        "historical": 90, "museum": 90, "cultural": 75,
+        "viewpoint": 45, "park": 60, "religious": 60,
+        "entertainment": 120, "other": 60,
+    }.get(attraction.category.lower(), 60)
     return {
         "id": attraction.id, "name": attraction.name, "category": optimizer_category,
         "catalog_category": attraction.category,
         "latitude": attraction.latitude, "longitude": attraction.longitude,
         "cost": fee if fee is not None else attraction.cost,
-        "visit_minutes": duration if duration is not None else attraction.visit_minutes,
+        "visit_minutes": duration if duration is not None else assumed_duration,
         "preference_score": attraction.preference_score, "weather_risk": attraction.weather_risk,
         "crowd_risk": attraction.crowd_risk, "availability_risk": attraction.availability_risk,
         "weather_risk_known": attraction.weather_risk_known, "crowd_risk_known": attraction.crowd_risk_known,
         "availability_risk_known": attraction.availability_risk_known, "risk_metadata": attraction.risk_metadata or {},
         "fatigue_score": attraction.fatigue_score,
-        "opening_minute": planning_window[0] if planning_window else attraction.opening_minute,
-        "closing_minute": planning_window[1] if planning_window else attraction.closing_minute,
+        "opening_minute": planning_window[0] if planning_window else 540,
+        "closing_minute": planning_window[1] if planning_window else 1140,
         "cost_known": fee is not None, "opening_hours": hours,
         "opening_window_known": planning_window is not None,
         "visit_duration_known": duration is not None,
@@ -388,4 +397,5 @@ def to_optimizer_attraction(attraction: Attraction) -> dict[str, Any]:
         "last_verified_at": attraction.last_verified_at.isoformat() if attraction.last_verified_at else None,
         "data_freshness": record_freshness(attraction), "raw_tags": attraction.raw_tags or {},
         "verification_notes": attraction.verification_notes,
+        "priority_score": priority_score, "priority_reasons": priority_reasons,
     }

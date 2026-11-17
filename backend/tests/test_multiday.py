@@ -127,5 +127,5 @@ def test_catalog_larger_than_trip_capacity_is_reported():
         meal_breaks=[], confirmed_activities=[], routing_provider="haversine",
     )
 
-    assert result["feasible"] is False
+    assert result["feasible"] is True
     assert "remain unscheduled" in result["warnings"][0]

@@ -32,6 +32,9 @@ export type AttractionInput = {
   last_verified_at?: string | null;
   data_freshness?: string | null;
   raw_tags?: Record<string, string>;
+  source_dataset?: string | null;
+  priority_score?: number;
+  priority_reasons?: string[];
 };
 
 export type AttractionCatalog = {
@@ -228,6 +231,7 @@ export type TripPlanningOptions = {
   traveler_count: number;
   transportation_mode: string;
   accommodation_category: "budget" | "standard" | "premium" | "luxury";
+  luxury_level?: number;
   meal_preferences: string[];
   miscellaneous_budget: number;
 };
@@ -379,10 +383,21 @@ export async function getTrip(tripId: number) {
 }
 
 export function getAttractionCatalog(destination: string) {
-  return request<AttractionCatalog>(
+  const key = destination.toLowerCase();
+  const cached = attractionCatalogCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.promise;
+  const promise = request<AttractionCatalog>(
     `/api/v1/attractions/catalog/${encodeURIComponent(destination)}`,
   );
+  attractionCatalogCache.set(key, { promise, expiresAt: Date.now() + 5 * 60_000 });
+  promise.catch(() => attractionCatalogCache.delete(key));
+  return promise;
 }
+
+const attractionCatalogCache = new Map<
+  string,
+  { promise: Promise<AttractionCatalog>; expiresAt: number }
+>();
 
 export async function updateTrip(
   tripId: number,
@@ -448,6 +463,7 @@ export async function createAndOptimizeTrip(input: {
   budget: number;
   travelerCount: number;
   accommodationCategory: TripPlanningOptions["accommodation_category"];
+  luxuryLevel: number;
   miscellaneousBudget: number;
   mealPreferences: string[];
   interests: string[];
@@ -479,23 +495,7 @@ export async function createAndOptimizeTrip(input: {
   const toIsoDate = (value: Date) =>
     `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
   const interestMap = Object.fromEntries(
-    input.interests.map((interest) => [
-      (
-        {
-          Heritage: "history",
-          "Heritage and History": "history",
-          "Food and Culinary Experiences": "food",
-          Mountains: "mountains",
-          "Mountains and Trekking": "mountains",
-          Beaches: "beaches",
-          "Nature and Wildlife": "nature",
-          "Spiritual and Cultural Travel": "spiritual",
-          "Relaxation and Wellness": "wellness",
-          "Road Trips": "road_trips",
-        } as Record<string, string>
-      )[interest] ?? interest.toLowerCase(),
-      1,
-    ]),
+    input.interests.map((interest) => [interest.toLowerCase(), 1]),
   );
 
   const trip = await request<{ id: number }>("/api/v1/trips", {
@@ -507,8 +507,8 @@ export async function createAndOptimizeTrip(input: {
       start_date: toIsoDate(start),
       end_date: toIsoDate(end),
       budget: input.budget,
-      // Planner timestamps are minutes from midnight, so 20:00 is the daily cutoff.
-      available_minutes_per_day: 1200,
+      // Planner timestamps are minutes from midnight: 09:00 start, 19:00 cutoff.
+      available_minutes_per_day: 1140,
       start_latitude: startLatitude,
       start_longitude: startLongitude,
       preferences: {
@@ -524,6 +524,7 @@ export async function createAndOptimizeTrip(input: {
         traveler_count: input.travelerCount,
         transportation_mode: input.preferences.transport,
         accommodation_category: input.accommodationCategory,
+        luxury_level: input.luxuryLevel,
         meal_preferences: input.mealPreferences,
         miscellaneous_budget: input.miscellaneousBudget,
       },

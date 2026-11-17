@@ -1,6 +1,6 @@
 
 from app.schemas import AttractionInput
-from app.services.routing import build_travel_time_matrix
+from app.services.routing import build_travel_time_matrix, estimate_minutes
 
 
 def test_haversine_matrix_is_square_and_nonnegative():
@@ -75,3 +75,14 @@ def test_haversine_matrix_is_symmetric():
 
     assert matrix[0][1] == matrix[1][0]
     assert matrix[1][2] == matrix[2][1]
+
+
+def test_transfer_estimate_uses_transport_mode_and_walking_tolerance():
+    origin, destination = (24.58, 73.71), (24.62, 73.78)
+    car = estimate_minutes(origin, destination, transport_mode="private car")
+    car_low_tolerance = estimate_minutes(origin, destination, transport_mode="private car", walking_tolerance=0.1)
+    car_high_tolerance = estimate_minutes(origin, destination, transport_mode="private car", walking_tolerance=0.9)
+    slow_walk = estimate_minutes(origin, destination, transport_mode="walking", walking_tolerance=0.1)
+    comfortable_walk = estimate_minutes(origin, destination, transport_mode="walking", walking_tolerance=0.9)
+    assert car < comfortable_walk < slow_walk
+    assert car_low_tolerance == car_high_tolerance

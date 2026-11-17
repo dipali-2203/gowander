@@ -63,6 +63,7 @@ class TripPlanningOptions(BaseModel):
     traveler_count: int = Field(default=1, ge=1, le=30)
     transportation_mode: str = Field(default="mixed", min_length=1, max_length=40)
     accommodation_category: Literal["budget", "standard", "premium", "luxury"] = "standard"
+    luxury_level: int = Field(default=3, ge=1, le=5)
     meal_preferences: list[str] = Field(default_factory=list, max_length=12)
     miscellaneous_budget: float = Field(default=0, ge=0, le=5_000_000)
 
@@ -74,7 +75,8 @@ class TripCreate(BaseModel):
     start_date: date
     end_date: date
     budget: float = Field(gt=0)
-    available_minutes_per_day: int = Field(default=1200, gt=0)
+    # Minutes since midnight: 09:00 start through 19:00 cutoff.
+    available_minutes_per_day: int = Field(default=1140, gt=0)
     start_latitude: float = Field(ge=-90, le=90)
     start_longitude: float = Field(ge=-180, le=180)
     preferences: Preferences = Field(default_factory=Preferences)
@@ -150,6 +152,8 @@ class AttractionInput(BaseModel):
     last_verified_at: str | None = Field(default=None, max_length=50)
     data_freshness: str | None = Field(default=None, max_length=20)
     raw_tags: dict[str, str] = Field(default_factory=dict)
+    priority_score: float | None = Field(default=None, ge=0, le=1)
+    priority_reasons: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_opening_window(self):

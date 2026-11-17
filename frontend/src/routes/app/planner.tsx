@@ -200,6 +200,7 @@ function Planner() {
               : form.hotelBudget === "lux"
                 ? "luxury"
                 : "standard",
+        luxuryLevel: form.luxury[0] ?? 3,
         miscellaneousBudget: 0,
         mealPreferences: [],
         interests: form.picks,
@@ -324,6 +325,15 @@ function Planner() {
                       Attraction details load from the local catalog. Unknown fees and hours stay
                       visibly unverified.
                     </p>
+                    {form.from.trim() &&
+                      form.to.trim() &&
+                      form.from.trim().toLowerCase() !== form.to.trim().toLowerCase() && (
+                        <p className="text-xs text-muted-foreground">
+                          {form.from.trim()} to {form.to.trim()} intercity travel is not routed or
+                          included in this estimate; the itinerary covers activities within{" "}
+                          {form.to.trim()}.
+                        </p>
+                      )}
                     {catalogLoading ? (
                       <p className="text-xs text-muted-foreground">Loading attraction catalog…</p>
                     ) : catalog ? (

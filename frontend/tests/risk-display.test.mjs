@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { riskAssessmentLabel, riskProxyLabel } from "../src/lib/risk-display.js";
+import { riskAssessmentLabel, riskDetailsLabel, riskProxyLabel } from "../src/lib/risk-display.js";
 
 test("unknown and partial assessments never display a percentage", () => {
   assert.equal(riskAssessmentLabel(null, "unavailable"), "Risk data unavailable");
@@ -17,4 +17,11 @@ test("verified zero and known nonzero assessments remain distinguishable", () =>
   );
   assert.equal(riskAssessmentLabel(0.25, "assumed"), "25% estimated disruption risk (assumed)");
   assert.equal(riskProxyLabel(0.25, "assumed"), "25% risk proxy");
+});
+
+test("scenario-derived inputs are labelled without claiming a complete risk score", () => {
+  assert.match(
+    riskDetailsLabel(null, "partial", { weather: { source: "scenario" } }),
+    /Scenario-derived.*incomplete/,
+  );
 });

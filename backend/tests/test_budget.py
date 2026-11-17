@@ -75,3 +75,15 @@ def test_fixed_estimates_are_reserved_before_attraction_budget(monkeypatch):
 
     constrained = make_trip(budget=2000)
     assert attraction_budget_after_fixed_costs(constrained) == 0
+
+
+def test_luxury_level_changes_configurable_hotel_and_meal_allowances(monkeypatch):
+    monkeypatch.setenv("TRIP_HOTEL_ESTIMATE_INR_PER_NIGHT_STANDARD", "1000")
+    monkeypatch.setenv("TRIP_MEAL_ESTIMATE_INR_PER_PERSON_PER_DAY", "100")
+    low = make_trip(planning_options={**make_trip().planning_options, "luxury_level": 1})
+    high = make_trip(planning_options={**make_trip().planning_options, "luxury_level": 5})
+    def amounts(trip):
+        result = estimate_trip_budget(trip=trip, days=[], attractions=[], data_source="osm")
+        return {item["key"]: item["amount"] for item in result["categories"]}
+    assert amounts(high)["accommodation"] > amounts(low)["accommodation"]
+    assert amounts(high)["meals"] > amounts(low)["meals"]

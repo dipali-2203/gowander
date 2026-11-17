@@ -11,6 +11,7 @@ from pymoo.optimize import minimize
 from app.schemas import AttractionInput, Preferences
 from app.services.planner import optimizer_risk_proxy, generate_greedy_itinerary
 from app.services.routing import TravelMatrix
+from app.services.attraction_relevance import balanced_interest_utility
 
 
 class AttractionSelectionProblem(ElementwiseProblem):
@@ -37,7 +38,7 @@ class AttractionSelectionProblem(ElementwiseProblem):
         for attraction in chosen:
             survival *= 1.0 - optimizer_risk_proxy(attraction)
         risk = 1.0 - survival
-        utility = sum(a.preference_score * self.preferences.interests.get(a.category.lower(), 0.5) for a in chosen)
+        utility = balanced_interest_utility(chosen, self.preferences)
         out["F"] = [cost, travel + visit_time, risk, -utility]
         out["G"] = [cost - self.budget, travel + visit_time - self.minutes]
 
@@ -47,6 +48,7 @@ def generate_nsga2_alternatives(
     start_latitude: float, start_longitude: float, budget: float,
     available_minutes: int, travel_matrix: TravelMatrix, seed: int = 42,
     max_alternatives: int = 3,
+    start_minute: int = 0,
 ) -> list[dict]:
     """Generate a small, deterministic Pareto set and decode it with greedy routing."""
     problem = AttractionSelectionProblem(attractions, preferences, travel_matrix, budget, available_minutes)
@@ -73,6 +75,7 @@ def generate_nsga2_alternatives(
             attractions=subset, preferences=preferences, start_latitude=start_latitude,
             start_longitude=start_longitude, budget=budget, available_minutes=available_minutes,
             travel_matrix=subset_matrix,
+            start_minute=start_minute,
         )
         if decoded["feasible"]:
             alternatives.append({"itinerary": decoded, "objectives": {

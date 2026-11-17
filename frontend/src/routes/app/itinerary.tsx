@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { useTripStore } from "@/store/trip";
-import { riskAssessmentLabel, riskProxyLabel } from "@/lib/risk-display.js";
+import { riskAssessmentLabel, riskDetailsLabel, riskProxyLabel } from "@/lib/risk-display.js";
 import {
   getTrip,
   getUserTrips,
@@ -264,7 +264,7 @@ function Itinerary() {
             1 - day.stops.reduce((survival, stop) => survival * (1 - (stop.risk_score ?? 0)), 1),
             generated.risk_data_status,
           )
-        : "Risk data unavailable",
+        : "",
     travelTime: `${day.total_travel_minutes} min`,
     distance: `${day.reserved_break_minutes} min meal/rest time`,
     hotel: "Accommodation is outside this baseline optimizer",
@@ -275,7 +275,7 @@ function Itinerary() {
         time: `${formatClock(stop.arrival_minute)}–${formatClock(stop.departure_minute)}`,
         attractionId: stop.attraction_id,
         title: stop.name,
-        detail: `${stop.departure_minute - stop.arrival_minute} min visit · ${stop.travel_minutes_before} min travel${stop.wait_minutes ? ` · ${stop.wait_minutes} min wait` : ""} · ${riskAssessmentLabel(stop.risk_score, stop.risk_data_status)}`,
+        detail: `${stop.departure_minute - stop.arrival_minute} min ${planningAttractions.find((item) => item.id === stop.attraction_id)?.visit_duration_known === false ? "planned (duration unknown; estimate)" : "visit"} · ${stop.travel_minutes_before} min estimated travel${stop.wait_minutes ? ` · ${stop.wait_minutes} min wait` : ""}`,
         cost: stop.cost,
       })),
       ...(day.stops.length > 0 ? day.meal_breaks : []).map((meal) => ({
@@ -289,6 +289,21 @@ function Itinerary() {
     ].sort((left, right) => left.minute - right.minute),
   }));
   const budgetEstimate = generated.budget_estimate;
+  const scheduledIds = new Set(
+    generated.days.flatMap((day) => day.stops.map((stop) => stop.attraction_id)),
+  );
+  const scheduledInputs = planningAttractions.filter((item) => scheduledIds.has(item.id));
+  const unknownFeeCount = scheduledInputs.filter((item) => item.cost_known === false).length;
+  const unknownHoursCount = scheduledInputs.filter(
+    (item) => item.opening_window_known === false,
+  ).length;
+  const estimatedDurationCount = scheduledInputs.filter(
+    (item) => item.visit_duration_known === false,
+  ).length;
+  const detailedWarnings = [
+    ...new Set([...generated.warnings, ...generated.days.flatMap((day) => day.warnings)]),
+  ];
+  const intercityNotice = savedTrips.find((trip) => trip.id === generated.trip_id)?.origin;
   const total = budgetEstimate?.total_estimated ?? generated.total_cost;
   const displayBreakdown = budgetEstimate?.categories.map((item) => ({
     name: item.label,
@@ -369,12 +384,63 @@ function Itinerary() {
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
         <ol className="relative space-y-5 border-l border-border pl-6">
-          {generated &&
-          (generated.warnings.length > 0 ||
-            generated.days.some((day) => day.warnings.length > 0)) ? (
-            <div className="surface border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
-              {[...generated.warnings, ...generated.days.flatMap((day) => day.warnings)].join(" ")}
-            </div>
+          {generated ? (
+            <section className="surface space-y-2 p-3 text-xs" aria-label="Planning assumptions">
+              <p className="text-sm text-muted-foreground">
+                Some attraction details, risk assessments and transfer times are estimated or
+                unavailable. Verify important details before travelling.
+              </p>
+              <p className="text-muted-foreground">
+                Unknown fees: {unknownFeeCount} · Unknown opening hours: {unknownHoursCount} ·
+                Estimated visit durations: {estimatedDurationCount} · Risk data:{" "}
+                {generated.risk_data_status}
+              </p>
+              {intercityNotice && (
+                <p className="text-muted-foreground">
+                  Intercity travel from {intercityNotice} to {generatedDestination} is excluded;
+                  this plan covers destination activities only.
+                </p>
+              )}
+              <details>
+                <summary className="cursor-pointer font-medium">View planning assumptions</summary>
+                <div className="mt-2 space-y-2 text-muted-foreground">
+                  <p>
+                    Risk data status: {generated.risk_data_status}. Unknown risk remains unavailable
+                    and is not treated as a verified zero.
+                  </p>
+                  {generated.days.flatMap((day) => day.stops).length > 0 && (
+                    <ul className="list-inside list-disc space-y-1">
+                      {generated.days
+                        .flatMap((day) => day.stops)
+                        .map((stop) => (
+                          <li key={stop.attraction_id}>
+                            {stop.name}:{" "}
+                            {riskDetailsLabel(
+                              stop.risk_score,
+                              stop.risk_data_status,
+                              planningAttractions.find((item) => item.id === stop.attraction_id)
+                                ?.risk_metadata,
+                            )}
+                            {(() => {
+                              const place = planningAttractions.find(
+                                (item) => item.id === stop.attraction_id,
+                              );
+                              return ` · planning relevance ${Math.round((place?.priority_score ?? 0.5) * 100)}% (${place?.priority_reasons?.join("; ") || "category and interest match"})`;
+                            })()}
+                          </li>
+                        ))}
+                    </ul>
+                  )}
+                  {detailedWarnings.length > 0 && (
+                    <ul className="list-inside list-disc space-y-1">
+                      {detailedWarnings.map((warning) => (
+                        <li key={warning}>{warning}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </details>
+            </section>
           ) : null}
           {generatedDay.map((day, i) => (
             <motion.li
@@ -395,14 +461,16 @@ function Itinerary() {
                     <p className="text-xs text-muted-foreground">{day.date}</p>
                   </div>
                   <div className="flex shrink-0 flex-wrap items-center gap-2 text-xs">
-                    <Badge variant="secondary">
-                      {day.weather === "Sunny" ? (
-                        <Sun className="mr-1 h-3 w-3" />
-                      ) : (
-                        <CloudSun className="mr-1 h-3 w-3" />
-                      )}
-                      {day.temp}
-                    </Badge>
+                    {day.temp && (
+                      <Badge variant="secondary">
+                        {day.weather === "Sunny" ? (
+                          <Sun className="mr-1 h-3 w-3" />
+                        ) : (
+                          <CloudSun className="mr-1 h-3 w-3" />
+                        )}
+                        {day.temp}
+                      </Badge>
+                    )}
                     <Badge variant="secondary">
                       <Clock className="mr-1 h-3 w-3" /> {day.travelTime}
                     </Badge>

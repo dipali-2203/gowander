@@ -21,3 +21,10 @@ export function riskProxyLabel(value, status) {
     ? "0% known-risk proxy (not a safety rating)"
     : `${Math.round(value * 100)}% risk proxy`;
 }
+
+export function riskDetailsLabel(score, status, metadata = {}) {
+  if (Object.values(metadata).some((item) => item?.source === "scenario")) {
+    return "Scenario-derived risk input; combined attraction risk is incomplete";
+  }
+  return riskAssessmentLabel(score, status);
+}

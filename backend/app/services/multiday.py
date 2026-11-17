@@ -5,6 +5,7 @@ from datetime import timedelta
 from app.schemas import AttractionInput, ConfirmedActivity, ItineraryStop, MealBreak, Preferences
 from app.services.planner import calculate_attraction_risk, generate_greedy_itinerary, risk_data_status
 from app.services.routing import estimate_minutes, build_travel_time_matrix
+from app.services.attraction_relevance import unsupported_interests
 
 
 def generate_multiday_greedy(
@@ -20,6 +21,8 @@ def generate_multiday_greedy(
     meal_breaks: list[MealBreak],
     confirmed_activities: list[ConfirmedActivity],
     routing_provider: str,
+    transport_mode: str = "mixed",
+    walking_tolerance: float = 0.5,
 ) -> dict:
     """Allocate attractions across days while preserving fixed reservations."""
     number_of_days = (end_date - start_date).days + 1
@@ -28,6 +31,7 @@ def generate_multiday_greedy(
     break_minutes = sum(item.duration_minutes for item in meal_breaks)
     days = []
     warnings: list[str] = []
+    day_start = 540 if available_minutes_per_day >= 540 else 0
 
     for index in range(number_of_days):
         day_number = index + 1
@@ -45,19 +49,28 @@ def generate_multiday_greedy(
         fixed_stops = []
         fixed_cost = 0.0
         fixed_warnings = []
-        previous_departure = 0
+        previous_departure = day_start
         previous_location = (start_latitude, start_longitude)
         for reservation in reservations:
             attraction = by_id.get(reservation.attraction_id)
             if attraction is None:
                 fixed_warnings.append(f"Confirmed activity {reservation.attraction_id} is unavailable.")
                 continue
+            if attraction.opening_window_known is False:
+                fixed_warnings.append(f"Opening hours for confirmed activity {attraction.name} are unknown; the 09:00–19:00 planning window is an assumption.")
+            if attraction.visit_duration_known is False:
+                fixed_warnings.append(f"Visit duration for confirmed activity {attraction.name} is unknown; the category-based planning duration is an assumption.")
+            if attraction.data_source == "osm":
+                fixed_warnings.append("Transfer times are conservative straight-line estimates with a local travel buffer, not road or traffic estimates.")
             departure = reservation.start_minute + attraction.visit_minutes
-            travel_before = estimate_minutes(previous_location, (attraction.latitude, attraction.longitude))
+            travel_before = estimate_minutes(previous_location, (attraction.latitude, attraction.longitude), transport_mode=transport_mode, walking_tolerance=walking_tolerance)
             if reservation.start_minute < attraction.opening_minute or departure > attraction.closing_minute:
                 fixed_warnings.append(f"Confirmed activity {attraction.name} falls outside its opening window.")
             if reservation.start_minute < previous_departure:
-                fixed_warnings.append(f"Confirmed activity {attraction.name} overlaps another reservation.")
+                if reservation.start_minute < day_start:
+                    fixed_warnings.append(f"Confirmed activity {attraction.name} cannot be reached before its fixed start time.")
+                else:
+                    fixed_warnings.append(f"Confirmed activity {attraction.name} overlaps another reservation.")
             if travel_before > reservation.start_minute - previous_departure:
                 fixed_warnings.append(f"Confirmed activity {attraction.name} cannot be reached before its fixed start time.")
             if departure > available_minutes_per_day:
@@ -89,21 +102,19 @@ def generate_multiday_greedy(
             matrix = build_travel_time_matrix(
                 start=start, attractions=flexible_attractions,
                 provider=routing_provider,
+                transport_mode=transport_mode, walking_tolerance=walking_tolerance,
             )
             result = generate_greedy_itinerary(
                 attractions=flexible_attractions, preferences=preferences,
                 start_latitude=start[0], start_longitude=start[1],
-                budget=max(0, daily_budget - fixed_cost), available_minutes=max(0, flexible_minutes),
+                budget=max(0, daily_budget - fixed_cost), available_minutes=available_minutes_per_day,
                 travel_matrix=matrix, priority_attraction_ids=required_ids,
-                blocked_windows=[(item.start_minute - previous_departure, item.start_minute - previous_departure + item.duration_minutes) for item in meal_breaks if item.start_minute >= previous_departure],
+                blocked_windows=[(item.start_minute, item.start_minute + item.duration_minutes) for item in meal_breaks if item.start_minute >= previous_departure],
                 # Spread the remaining catalog over the remaining trip days. This
                 # prevents the greedy baseline from consuming a whole catalog on day 1.
-                max_stops=max(0, (len(remaining) + days_left - 1) // days_left - len(fixed_stops)),
+                max_stops=min(5, max(0, (len(remaining) + days_left - 1) // days_left - len(fixed_stops))),
+                start_minute=previous_departure,
             )
-
-        for stop in result["stops"]:
-            stop.arrival_minute += previous_departure
-            stop.departure_minute += previous_departure
         result["stops"] = [*fixed_stops, *result["stops"]]
         result["total_cost"] += fixed_cost
         result["total_travel_minutes"] += sum(stop.travel_minutes_before for stop in fixed_stops)
@@ -126,6 +137,11 @@ def generate_multiday_greedy(
 
         selected_ids = {stop.attraction_id for stop in result["stops"]}
         missing_required = required_ids - selected_ids
+        fixed_violation = any(
+            phrase in warning
+            for warning in fixed_warnings
+            for phrase in ("falls outside its opening window", "overlaps another reservation", "cannot be reached", "exceeds the daily time limit", "overlaps a meal break", "is unavailable")
+        )
         day_warnings = list(result["warnings"])
         if missing_required:
             day_warnings.append("Confirmed activities could not be scheduled: " + ", ".join(sorted(missing_required)))
@@ -138,9 +154,9 @@ def generate_multiday_greedy(
             "total_visit_minutes": result["total_visit_minutes"],
             "reserved_break_minutes": break_minutes,
             "meal_breaks": meal_breaks,
-            "feasible": result["feasible"] and not missing_required and not any(
-                "Risk data is incomplete" not in warning for warning in result["warnings"]
-            ),
+            # Missing observations and unscheduled catalog alternatives are
+            # disclosures, not hard schedule violations.
+            "feasible": result["feasible"] and not missing_required and not fixed_violation,
             "warnings": day_warnings,
         })
         remaining_budget -= result["total_cost"]
@@ -164,6 +180,15 @@ def generate_multiday_greedy(
             survival *= 1 - stop.risk_score
     if stop_list and not risk_complete:
         warnings.append("Risk data is incomplete. The optimizer used a known-components-only proxy; this is not a verified safety assessment.")
+        warnings.append("Risk tolerance could not be fully applied because scheduled risk observations are unavailable.")
+    unsupported = unsupported_interests(attractions, preferences.interests)
+    if unsupported:
+        warnings.append("The current attraction catalog cannot represent these selected interests well: " + ", ".join(unsupported) + ".")
+    warnings = list(dict.fromkeys(warnings))
+    reported = set(warnings)
+    for day in days:
+        day["warnings"] = [item for item in dict.fromkeys(day["warnings"]) if item not in reported]
+        reported.update(day["warnings"])
     return {
         "days": days,
         "total_cost": round(total_cost, 2),
@@ -172,8 +197,6 @@ def generate_multiday_greedy(
         "satisfaction": round(sum(stop.preference_score for stop in stop_list) / len(stop_list), 3) if stop_list else 0.0,
         "risk_score": round(1 - survival, 3) if stop_list and risk_complete else None,
         "risk_data_status": risk_data_status([item for item in attractions if item.id in {stop.attraction_id for stop in stop_list}]),
-        "feasible": all(day["feasible"] for day in days) and not any(
-            "Risk data is incomplete" not in warning for warning in warnings
-        ),
+        "feasible": all(day["feasible"] for day in days),
         "warnings": warnings,
     }

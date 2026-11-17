@@ -73,6 +73,8 @@ def _build_saved_multiday_plan(trip: Trip, request: MultiDayOptimizeRequest):
             meal_breaks=request.meal_breaks,
             confirmed_activities=request.confirmed_activities,
             routing_provider=os.getenv("ROUTING_PROVIDER", "haversine"),
+            transport_mode=(trip.planning_options or {}).get("transportation_mode", "mixed"),
+            walking_tolerance=Preferences.model_validate(trip.preferences).walking_tolerance,
         )
 
     allocation = attraction_budget_after_fixed_costs(trip)
@@ -110,12 +112,15 @@ def _build_saved_multiday_plan(trip: Trip, request: MultiDayOptimizeRequest):
         )
     if unknown_hours:
         result["warnings"].append(
-            f"Opening hours are not usable as schedule constraints for {len(unknown_hours)} scheduled attraction(s); the optimizer used an all-day window."
+            f"Opening hours are unknown for {len(unknown_hours)} scheduled attraction(s); the optimizer used an assumed 09:00–19:00 planning window."
         )
     if unknown_durations:
         result["warnings"].append(
-            f"Visit duration is unverified for {len(unknown_durations)} scheduled attraction(s); the optimizer used a 60-minute planning placeholder."
+            f"Visit duration is unknown for {len(unknown_durations)} scheduled attraction(s); the optimizer used category-based planning estimates."
         )
+    result["warnings"] = list(dict.fromkeys(result["warnings"]))
+    for day in result["days"]:
+        day["warnings"] = list(dict.fromkeys(day["warnings"]))
     return result
 
 
@@ -359,6 +364,8 @@ def optimize_trip(
             ),
             attractions=request.attractions,
             provider=provider,
+            transport_mode=(trip.planning_options or {}).get("transportation_mode", "mixed"),
+            walking_tolerance=Preferences.model_validate(trip.preferences).walking_tolerance,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -381,6 +388,7 @@ def optimize_trip(
             budget=attraction_budget_after_fixed_costs(trip),
             available_minutes=trip.available_minutes_per_day,
             travel_matrix=travel_matrix,
+            start_minute=540 if trip.available_minutes_per_day >= 540 else 0,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -472,12 +480,15 @@ def generate_pareto_alternatives(trip_id: int, request: ParetoRequest, db: Sessi
         matrix = build_travel_time_matrix(
             start=(trip.start_latitude, trip.start_longitude), attractions=request.attractions,
             provider=os.getenv("ROUTING_PROVIDER", "haversine"),
+            transport_mode=(trip.planning_options or {}).get("transportation_mode", "mixed"),
+            walking_tolerance=Preferences.model_validate(trip.preferences).walking_tolerance,
         )
         alternatives = generate_nsga2_alternatives(
             attractions=request.attractions, preferences=Preferences.model_validate(trip.preferences),
             start_latitude=trip.start_latitude, start_longitude=trip.start_longitude,
             budget=attraction_budget_after_fixed_costs(trip), available_minutes=trip.available_minutes_per_day,
             travel_matrix=matrix, seed=request.seed, max_alternatives=request.max_alternatives,
+            start_minute=540 if trip.available_minutes_per_day >= 540 else 0,
         )
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -502,6 +513,7 @@ def optimize_with_annealing(trip_id: int, request: AnnealingRequest, db: Session
     result = generate_annealed_itinerary(
         request.attractions, Preferences.model_validate(trip.preferences), trip.start_latitude,
         trip.start_longitude, attraction_budget_after_fixed_costs(trip), trip.available_minutes_per_day, request.seed,
+        start_minute=540 if trip.available_minutes_per_day >= 540 else 0,
     )
     response = ItineraryResponse(trip_id=trip.id, algorithm="simulated_annealing", **result)
     trip.optimization_results = {
@@ -527,12 +539,14 @@ def replan_scenario(trip_id: int, request: ScenarioReplanRequest, db: Session = 
     matrix = build_travel_time_matrix(
         start=(request.current_latitude, request.current_longitude), attractions=remaining,
         provider=os.getenv("ROUTING_PROVIDER", "haversine"),
+        transport_mode=(trip.planning_options or {}).get("transportation_mode", "mixed"),
+        walking_tolerance=Preferences.model_validate(trip.preferences).walking_tolerance,
     )
     adjusted, adjusted_matrix, closed, applied = apply_disruptions(remaining, request.disruptions, matrix)
     eligible = [item for item in adjusted if item.id not in closed and item.id not in request.closed_attraction_ids]
     if not eligible:
         result = {"stops": [], "total_cost": 0.0, "total_travel_minutes": 0, "total_visit_minutes": 0,
-                  "satisfaction": 0.0, "risk_score": 0.0, "feasible": False,
+                  "satisfaction": 0.0, "risk_score": None, "feasible": False,
                   "warnings": ["No eligible attractions remain after disruptions."]}
     else:
         eligible_ids = {item.id for item in eligible}
@@ -543,6 +557,7 @@ def replan_scenario(trip_id: int, request: ScenarioReplanRequest, db: Session = 
             start_latitude=request.current_latitude, start_longitude=request.current_longitude,
             budget=request.remaining_budget, available_minutes=request.remaining_minutes, travel_matrix=submatrix,
             priority_attraction_ids=set(request.previous_planned_attraction_ids),
+            start_minute=540,
         )
     selected_ids = {stop.attraction_id for stop in result["stops"]}
     previous_ids = set(request.previous_planned_attraction_ids)
@@ -623,6 +638,8 @@ def optimize_saved_trip(
             start=(trip.start_latitude, trip.start_longitude),
             attractions=attractions,
             provider=provider,
+            transport_mode=(trip.planning_options or {}).get("transportation_mode", "mixed"),
+            walking_tolerance=preferences.walking_tolerance,
         )
 
         result = generate_greedy_itinerary(
@@ -633,6 +650,7 @@ def optimize_saved_trip(
             budget=attraction_budget_after_fixed_costs(trip),
             available_minutes=trip.available_minutes_per_day,
             travel_matrix=travel_matrix,
+            start_minute=540 if trip.available_minutes_per_day >= 540 else 0,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -735,7 +753,7 @@ def replan_trip(
             "total_travel_minutes": 0,
             "total_visit_minutes": 0,
             "satisfaction": 0.0,
-            "risk_score": 0.0,
+            "risk_score": None,
             "feasible": False,
             "warnings": [
                 "No eligible attractions remain after excluding completed and closed attractions."
@@ -760,6 +778,8 @@ def replan_trip(
                 ),
                 attractions=remaining_attractions,
                 provider=provider,
+                transport_mode=(trip.planning_options or {}).get("transportation_mode", "mixed"),
+                walking_tolerance=preferences.walking_tolerance,
             )
 
             # 7. Generate a new plan using remaining resources.
@@ -770,6 +790,7 @@ def replan_trip(
                 start_longitude=request.current_longitude,
                 budget=request.remaining_budget,
                 available_minutes=request.remaining_minutes,
+                start_minute=540,
                 travel_matrix=travel_matrix,
             )
 

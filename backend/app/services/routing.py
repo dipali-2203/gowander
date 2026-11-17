@@ -27,9 +27,21 @@ def haversine_km(a: Location, b: Location) -> float:
     return 6371.0 * 2 * asin(sqrt(value))
 
 
-def estimate_minutes(a: Location, b: Location) -> int:
-    """Local fallback; not a real road travel-time estimate."""
-    return ceil(haversine_km(a, b) / 25.0 * 60.0)
+def estimate_minutes(a: Location, b: Location, *, transport_mode: str = "mixed", walking_tolerance: float = 0.5) -> int:
+    """Conservative straight-line local transfer estimate, adjusted for mode."""
+    distance = haversine_km(a, b)
+    if distance < 0.01:
+        return 0
+    mode = transport_mode.strip().lower()
+    if mode in {"walk", "walking"}:
+        # Tolerance changes only this walking estimate, never car travel.
+        speed, buffer = 3.8 + max(0.0, min(1.0, walking_tolerance)) * 1.2, 3
+    elif mode in {"car", "private car", "taxi", "cab", "rental vehicle", "motorbike"}:
+        speed, buffer = (22.0 if mode in {"car", "private car"} else 20.0), 10
+    else:
+        speed, buffer = 16.0, 12
+    # Straight-line distance understates local travel; this remains an estimate.
+    return max(buffer, ceil(distance * 1.35 / speed * 60.0) + buffer)
 
 
 def build_travel_time_matrix(
@@ -37,6 +49,8 @@ def build_travel_time_matrix(
     attractions: list[AttractionInput],
     provider: Literal["haversine", "osrm"] = "haversine",
     osrm_base_url: str = "https://router.project-osrm.org",
+    transport_mode: str = "mixed",
+    walking_tolerance: float = 0.5,
 ) -> TravelMatrix:
     """
     Matrix order:
@@ -62,7 +76,8 @@ def build_travel_time_matrix(
         return [
             [
                 0 if i == j else estimate_minutes(
-                    locations[i], locations[j]
+                    locations[i], locations[j], transport_mode=transport_mode,
+                    walking_tolerance=walking_tolerance,
                 )
                 for j in range(n)
             ]

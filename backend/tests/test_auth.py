@@ -165,11 +165,19 @@ def test_trip_crud_persists_inputs_and_keeps_old_plan_when_edited(client: TestCl
             "available_minutes_per_day": 1200,
             "start_latitude": 26.9124,
             "start_longitude": 75.7873,
-            "preferences": {},
+            "preferences": {
+                "interests": {"heritage": 1, "spiritual": 1, "adventure": 1},
+                "risk_tolerance": 0.3,
+                "walking_tolerance": 0.8,
+                "crowd_tolerance": 0.5,
+                "travel_pace": 0.5,
+                "preferred_transport": "car",
+            },
             "planning_options": {
                 "traveler_count": 2,
                 "transportation_mode": "train",
                 "accommodation_category": "standard",
+                "luxury_level": 3,
                 "meal_preferences": ["vegetarian"],
                 "miscellaneous_budget": 1000,
             },
@@ -228,6 +236,10 @@ def test_trip_crud_persists_inputs_and_keeps_old_plan_when_edited(client: TestCl
     assert detail["itinerary_stale"] is True
     assert detail["planning_inputs"]["attractions"][0]["id"] == "museum"
     assert detail["planning_options"]["traveler_count"] == 2
+    assert detail["origin"] == "Delhi"
+    assert detail["preferences"]["interests"] == {"heritage": 1.0, "spiritual": 1.0, "adventure": 1.0}
+    assert detail["preferences"]["walking_tolerance"] == 0.8
+    assert detail["planning_options"]["luxury_level"] == 3
     assert "pareto" in detail["optimization_results"]
     assert "simulated_annealing" in detail["optimization_results"]
 

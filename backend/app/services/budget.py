@@ -86,14 +86,15 @@ def estimate_trip_budget(
     transportation = round(route_km * rate * fare_units, 2)
 
     hotel_default = HOTEL_DEFAULTS[options.accommodation_category]
+    luxury_factor = 0.7 + (options.luxury_level - 1) * 0.15
     nightly_rate = _configured_amount(
         f"TRIP_HOTEL_ESTIMATE_INR_PER_NIGHT_{options.accommodation_category.upper()}",
         hotel_default,
     )
-    accommodation = round(nights * rooms * nightly_rate, 2)
+    accommodation = round(nights * rooms * nightly_rate * luxury_factor, 2)
 
     meal_base_per_person_day = _configured_amount("TRIP_MEAL_ESTIMATE_INR_PER_PERSON_PER_DAY", 600.0)
-    meal_multiplier = MEAL_MULTIPLIERS[options.accommodation_category]
+    meal_multiplier = MEAL_MULTIPLIERS[options.accommodation_category] * (0.8 + (options.luxury_level - 1) * 0.1)
     meals = round(day_count * traveler_count * meal_base_per_person_day * meal_multiplier, 2)
     miscellaneous = round(options.miscellaneous_budget, 2)
     total = round(attraction_cost + transportation + accommodation + meals + miscellaneous, 2)
@@ -119,7 +120,7 @@ def estimate_trip_budget(
             "key": "accommodation", "label": "Accommodation allowance", "amount": accommodation,
             "source": "configurable_estimate", "confidence": "low",
             "range_min": round(accommodation * 0.75, 2), "range_max": round(accommodation * 1.4, 2),
-            "assumptions": [f"{nights} nights × {rooms} room(s) × ₹{nightly_rate:g}/room/night; two-person room occupancy assumption.", fallback_assumption],
+            "assumptions": [f"{nights} nights × {rooms} room(s) × ₹{nightly_rate:g}/room/night × {luxury_factor:.2g} luxury factor; two-person room occupancy assumption.", fallback_assumption],
         },
         {
             "key": "meals", "label": "Meals allowance", "amount": meals,
@@ -165,10 +166,11 @@ def attraction_budget_after_fixed_costs(trip: Trip) -> float:
         f"TRIP_HOTEL_ESTIMATE_INR_PER_NIGHT_{options.accommodation_category.upper()}",
         HOTEL_DEFAULTS[options.accommodation_category],
     )
+    hotel_rate *= 0.7 + (options.luxury_level - 1) * 0.15
     meal_rate = _configured_amount("TRIP_MEAL_ESTIMATE_INR_PER_PERSON_PER_DAY", 600.0)
     fixed = (
         nights * rooms * hotel_rate
-        + day_count * options.traveler_count * meal_rate * MEAL_MULTIPLIERS[options.accommodation_category]
+        + day_count * options.traveler_count * meal_rate * MEAL_MULTIPLIERS[options.accommodation_category] * (0.8 + (options.luxury_level - 1) * 0.1)
         + options.miscellaneous_budget
     )
     return max(0.0, trip.budget - fixed)

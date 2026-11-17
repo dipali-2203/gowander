@@ -155,3 +155,45 @@ def test_planner_respects_opening_hours():
 
     assert result["stops"][0].arrival_minute >= 120
     assert result["feasible"] is True
+
+
+def test_itinerary_can_use_explicit_nine_to_seven_planning_window():
+    attraction = make_attraction("morning")
+    attraction.opening_minute = 540
+    attraction.closing_minute = 1140
+    result = generate_greedy_itinerary(
+        [attraction], Preferences(), 17.385, 78.4867, 500, 1140,
+        start_minute=540,
+    )
+    assert result["stops"]
+    assert result["stops"][0].arrival_minute >= 540
+    assert result["stops"][-1].departure_minute <= 1140
+
+
+def test_default_candidate_limit_keeps_large_catalogs_browsable_elsewhere():
+    attractions = [make_attraction(f"place-{i}") for i in range(8)]
+    for item in attractions:
+        item.closing_minute = 1140
+    result = generate_greedy_itinerary(
+        attractions, Preferences(), 17.385, 78.4867, 5000, 1140,
+        start_minute=540,
+    )
+    assert len(result["stops"]) <= 5
+    assert "remain" not in " ".join(result["warnings"])
+
+
+def test_travel_pace_controls_reasonable_stop_count():
+    attractions = [make_attraction(f"pace-{i}") for i in range(8)]
+    for item in attractions:
+        item.closing_minute = 1140
+    slow = generate_greedy_itinerary(
+        attractions, Preferences(travel_pace=0.2), 17.385, 78.4867, 5000, 1140,
+        start_minute=540,
+    )
+    fast = generate_greedy_itinerary(
+        attractions, Preferences(travel_pace=0.9), 17.385, 78.4867, 5000, 1140,
+        start_minute=540,
+    )
+    assert len(slow["stops"]) <= 3
+    assert len(fast["stops"]) <= 5
+    assert len(slow["stops"]) < len(fast["stops"])

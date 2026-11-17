@@ -4,7 +4,7 @@ import { ArrowLeft, Copy, Pencil, RefreshCw, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/travel/PageHeader";
 import { Button } from "@/components/ui/button";
-import { riskAssessmentLabel, riskProxyLabel } from "@/lib/risk-display.js";
+import { riskAssessmentLabel, riskDetailsLabel, riskProxyLabel } from "@/lib/risk-display.js";
 import {
   deleteTrip,
   duplicateTrip,
@@ -512,6 +512,45 @@ function TripDetailsPage() {
       {hasDaySchedule ? (
         <section className="space-y-4">
           <h2 className="text-lg font-semibold">Saved itinerary</h2>
+          <section
+            className="surface space-y-2 p-3 text-xs"
+            aria-label="Saved itinerary assumptions"
+          >
+            <p className="text-sm text-muted-foreground">
+              Some attraction details, risk assessments and transfer times are estimated or
+              unavailable. Verify important details before travelling.
+            </p>
+            <p className="text-muted-foreground">
+              Risk data: {itinerary?.risk_data_status ?? "unavailable"}. Risk tolerance cannot be
+              fully applied when observations are missing.
+            </p>
+            <details>
+              <summary className="cursor-pointer font-medium">
+                View individual risk assessments and warnings
+              </summary>
+              <ul className="mt-2 list-inside list-disc space-y-1 text-muted-foreground">
+                {itinerary?.days
+                  ?.flatMap((day) => day.stops)
+                  .map((stop) => (
+                    <li key={stop.attraction_id}>
+                      {stop.name}:{" "}
+                      {riskDetailsLabel(
+                        stop.risk_score,
+                        stop.risk_data_status,
+                        trip.planning_inputs?.attractions.find(
+                          (item) => item.id === stop.attraction_id,
+                        )?.risk_metadata,
+                      )}
+                    </li>
+                  ))}
+                {[...new Set(itinerary?.days?.flatMap((day) => day.warnings) ?? [])].map(
+                  (warning) => (
+                    <li key={warning}>{warning}</li>
+                  ),
+                )}
+              </ul>
+            </details>
+          </section>
           {itinerary.days!.map((day) => (
             <article key={day.day_number} className="surface space-y-3 p-5">
               <header className="flex flex-wrap justify-between gap-2">
@@ -531,9 +570,14 @@ function TripDetailsPage() {
                         {clock(stop.arrival_minute)}–{clock(stop.departure_minute)} · {stop.name}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        {stop.travel_minutes_before} min estimated travel · ₹
-                        {stop.cost.toLocaleString("en-IN")} attraction fee ·{" "}
-                        {riskAssessmentLabel(stop.risk_score, stop.risk_data_status)}
+                        {stop.travel_minutes_before} min estimated travel ·{" "}
+                        {stop.departure_minute - stop.arrival_minute} min{" "}
+                        {trip.planning_inputs?.attractions.find(
+                          (item) => item.id === stop.attraction_id,
+                        )?.visit_duration_known === false
+                          ? "planned (duration unknown; estimate)"
+                          : "visit"}{" "}
+                        · ₹{stop.cost.toLocaleString("en-IN")} attraction fee
                       </p>
                     </li>
                   ))}
@@ -548,9 +592,6 @@ function TripDetailsPage() {
                   Meal/rest break {clock(meal.start_minute)} · {meal.duration_minutes} min
                 </p>
               ))}
-              {day.warnings.length ? (
-                <p className="text-sm text-amber-700">{day.warnings.join(" ")}</p>
-              ) : null}
             </article>
           ))}
         </section>

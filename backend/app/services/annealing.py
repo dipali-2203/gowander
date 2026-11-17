@@ -5,15 +5,16 @@ from random import Random
 
 from app.schemas import AttractionInput, Preferences
 from app.services.planner import optimizer_risk_proxy, generate_greedy_itinerary
+from app.services.attraction_relevance import balanced_interest_utility
 
 
-def generate_annealed_itinerary(attractions: list[AttractionInput], preferences: Preferences, start_latitude: float, start_longitude: float, budget: float, available_minutes: int, seed: int = 42) -> dict:
+def generate_annealed_itinerary(attractions: list[AttractionInput], preferences: Preferences, start_latitude: float, start_longitude: float, budget: float, available_minutes: int, seed: int = 42, start_minute: int = 0) -> dict:
     random = Random(seed)
     current = [True] * len(attractions)
 
     def score(selection):
         chosen = [item for item, active in zip(attractions, selection) if active]
-        utility = sum(item.preference_score * preferences.interests.get(item.category.lower(), 0.5) for item in chosen)
+        utility = balanced_interest_utility(chosen, preferences)
         cost = sum(item.cost for item in chosen)
         duration = sum(item.visit_minutes for item in chosen)
         risk = sum(optimizer_risk_proxy(item) for item in chosen)
@@ -33,4 +34,4 @@ def generate_annealed_itinerary(attractions: list[AttractionInput], preferences:
         if current_score > best_score:
             best, best_score = current[:], current_score
     selected = [item for item, active in zip(attractions, best) if active]
-    return generate_greedy_itinerary(selected, preferences, start_latitude, start_longitude, budget, available_minutes)
+    return generate_greedy_itinerary(selected, preferences, start_latitude, start_longitude, budget, available_minutes, start_minute=start_minute)

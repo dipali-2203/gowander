@@ -9,6 +9,7 @@ from app.schemas import (
 
 from app.services.routing import TravelMatrix, build_travel_time_matrix
 from app.services.constraints import validate_itinerary
+from app.services.attraction_relevance import category_diversity_factor, inferred_walking_effort, interest_match, unsupported_interests
 
 
 def distance_km(
@@ -105,7 +106,8 @@ def generate_greedy_itinerary(
     travel_matrix: TravelMatrix | None = None,
     priority_attraction_ids: set[str] | None = None,
     blocked_windows: list[tuple[int, int]] | None = None,
-    max_stops: int | None = None,
+    max_stops: int | None = 5,
+    start_minute: int = 0,
 ) -> dict:
     """Generate a feasible greedy itinerary for one planning day."""
 
@@ -156,10 +158,13 @@ def generate_greedy_itinerary(
     stops: list[ItineraryStop] = []
 
     current_index = 0
-    elapsed = 0
+    elapsed = start_minute
     spent = 0.0
+    category_counts: dict[str, int] = {}
+    pace_limit = 3 if preferences.travel_pace < 0.34 else 4 if preferences.travel_pace < 0.67 else 5
+    stop_limit = min(max_stops if max_stops is not None else 5, pace_limit, 5)
 
-    while remaining and (max_stops is None or len(stops) < max_stops):
+    while remaining and len(stops) < stop_limit:
         candidates = []
 
         for attraction in remaining:
@@ -189,13 +194,11 @@ def generate_greedy_itinerary(
             if departure > attraction.closing_minute:
                 continue
 
-            category_weight = preferences.interests.get(
-                attraction.category.lower(), 0.5
-            )
-
-            utility = (
-                attraction.preference_score * category_weight
-            )
+            priority = attraction.priority_score if attraction.priority_score is not None else attraction.preference_score
+            fit = interest_match(attraction, preferences.interests)
+            diversity = category_diversity_factor(attraction, category_counts)
+            effort = inferred_walking_effort(attraction) if attraction.data_source == "osm" else attraction.fatigue_score
+            utility = attraction.preference_score * (0.7 + 0.6 * fit) * diversity * (0.75 + 0.5 * priority)
 
             risk = optimizer_risk_proxy(attraction)
 
@@ -203,15 +206,13 @@ def generate_greedy_itinerary(
             risk_penalty = 1.0 - preferences.risk_tolerance
             crowd_penalty = (attraction.crowd_risk if attraction.crowd_risk_known else 0.0) * (1.0 - preferences.crowd_tolerance)
             cost_penalty = (attraction.cost / max(budget, 1)) * preferences.budget_sensitivity
-            fatigue_penalty = attraction.fatigue_score * (1.0 - preferences.walking_tolerance) * (1.0 - preferences.travel_pace)
+            fatigue_penalty = effort * (1.0 - preferences.walking_tolerance)
 
             risk_adjusted_utility = utility * (
                 1.0 - risk * risk_penalty - crowd_penalty - cost_penalty - fatigue_penalty
             )
 
-            score = risk_adjusted_utility / max(
-                required_minutes, 1
-            )
+            score = risk_adjusted_utility / max(required_minutes, 1) + (priority - 0.5) * 0.01
             if priority_attraction_ids and attraction.id in priority_attraction_ids:
                 score += 100.0
 
@@ -261,6 +262,8 @@ def generate_greedy_itinerary(
         elapsed = departure
         spent += selected.cost
         current_index = selected_index
+        selected_category = (selected.catalog_category or selected.category).lower()
+        category_counts[selected_category] = category_counts.get(selected_category, 0) + 1
         remaining.remove(selected)
 
     total_travel = sum(
@@ -287,12 +290,28 @@ def generate_greedy_itinerary(
 
     warnings = []
 
+    if any(attraction.opening_window_known is False for attraction in remaining + [stop_attraction for stop_attraction in attractions if stop_attraction.id in {stop.attraction_id for stop in stops}]):
+        warnings.append("Some opening hours are unknown; the 09:00–19:00 planning window is an assumption, not verified business hours.")
+    if any(attraction.visit_duration_known is False for attraction in attractions if attraction.id in {stop.attraction_id for stop in stops}):
+        warnings.append("Some visit durations are unknown; category-based planning estimates are assumptions.")
+    if any(attraction.data_source == "osm" for attraction in attractions):
+        warnings.append("Transfer times are conservative straight-line estimates with a local travel buffer, not road or traffic estimates.")
+
     if not stops:
         warnings.append(
             "No attractions fit the available budget and time."
         )
     if stops and not risk_complete:
         warnings.append("Risk data is incomplete. The optimizer used a known-components-only proxy; this is not a verified safety assessment.")
+        warnings.append("Risk tolerance could not be fully applied because scheduled risk observations are unavailable.")
+    if any(attraction.data_source == "osm" for attraction in attractions) and stops:
+        if any(stop.risk_data_status == "unavailable" for stop in stops):
+            warnings.append("Crowd tolerance cannot be fully optimized because crowd observations are unavailable.")
+        if preferences.walking_tolerance < 0.5:
+            warnings.append("Walking effort is estimated from attraction categories and OSM activity tags, not measured accessibility or terrain data.")
+    unsupported = unsupported_interests(attractions, preferences.interests)
+    if unsupported:
+        warnings.append("The current attraction catalog cannot represent these selected interests well: " + ", ".join(unsupported) + ".")
     if remaining:
         warnings.append(
             f"{len(remaining)} attractions were omitted because "
