@@ -26,7 +26,7 @@ test("advanced itinerary tools are grouped in a native collapsed-by-default disc
     assert.ok(advanced.includes(section), `missing advanced section: ${section}`);
   }
   assert.doesNotMatch(source, /Planning conditions|inspectConditions|conditions\.conditions/);
-  assert.match(source, /Forecast for scheduled activities/);
+  assert.doesNotMatch(source, /Forecast for scheduled activities|weatherSummary: day\.stops/);
   assert.match(source, /WeatherForecastCard/);
   assert.ok(savedTripSource.includes("Advanced Optimization Insights"));
   assert.ok(savedTripSource.includes("Saved single-day optimization alternatives"));
@@ -78,10 +78,16 @@ test("accepted and rejected weather proposals clear their pending UI state", () 
   );
 });
 
-test("weather proposal UI is pending-only while accepted forecasts remain in their itinerary day", () => {
+test("weather proposals stay in the proposal panel, not in daily activity rows", () => {
   assert.match(source, /\{weatherProposal \? \([\s\S]*?Forecast-based proposal/);
-  assert.match(source, /weatherSummary: day\.stops\.flatMap/);
-  assert.match(source, /day\.weatherSummary\.map\(\(item\) => \(\s*<WeatherForecastCard/);
+  const rowMappingStart = source.indexOf("const generatedDay = generated.days.map");
+  const rowMappingEnd = source.indexOf("const budgetEstimate =", rowMappingStart);
+  const dailyRows = source.slice(rowMappingStart, rowMappingEnd);
+  assert.doesNotMatch(
+    dailyRows,
+    /weather_assessment|WeatherForecastCard|Weather advisory|Weather data unavailable/,
+  );
+  assert.match(source, /weatherProposal\.weather_summary\.map\(\(item\) => \(/);
   assert.match(source, /restorePendingWeatherProposal\(proposal, selectedTripId\)/);
 });
 

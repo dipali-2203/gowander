@@ -25,6 +25,7 @@ import { Route as AppPlannerRouteImport } from './routes/app/planner'
 import { Route as AppProfileRouteImport } from './routes/app/profile'
 import { Route as AppSavedRouteImport } from './routes/app/saved'
 import { Route as AppSettingsRouteImport } from './routes/app/settings'
+import { Route as SharedTokenRouteImport } from './routes/shared.$token'
 import { Route as AppTripsTripIdRouteImport } from './routes/app/trips.$tripId'
 
 const IndexRoute = IndexRouteImport.update({
@@ -107,6 +108,11 @@ const AppSettingsRoute = AppSettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => AppRouteRoute,
 } as any)
+const SharedTokenRoute = SharedTokenRouteImport.update({
+  id: '/shared/$token',
+  path: '/shared/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AppTripsTripIdRoute = AppTripsTripIdRouteImport.update({
   id: '/trips/$tripId',
   path: '/trips/$tripId',
@@ -130,6 +136,7 @@ export interface FileRoutesByFullPath {
   '/app/profile': typeof AppProfileRoute
   '/app/saved': typeof AppSavedRoute
   '/app/settings': typeof AppSettingsRoute
+  '/shared/$token': typeof SharedTokenRoute
   '/app/trips/$tripId': typeof AppTripsTripIdRoute
 }
 export interface FileRoutesByTo {
@@ -149,6 +156,7 @@ export interface FileRoutesByTo {
   '/app/profile': typeof AppProfileRoute
   '/app/saved': typeof AppSavedRoute
   '/app/settings': typeof AppSettingsRoute
+  '/shared/$token': typeof SharedTokenRoute
   '/app/trips/$tripId': typeof AppTripsTripIdRoute
 }
 export interface FileRoutesById {
@@ -169,6 +177,7 @@ export interface FileRoutesById {
   '/app/profile': typeof AppProfileRoute
   '/app/saved': typeof AppSavedRoute
   '/app/settings': typeof AppSettingsRoute
+  '/shared/$token': typeof SharedTokenRoute
   '/app/trips/$tripId': typeof AppTripsTripIdRoute
 }
 export interface FileRouteTypes {
@@ -190,6 +199,7 @@ export interface FileRouteTypes {
     | '/app/profile'
     | '/app/saved'
     | '/app/settings'
+    | '/shared/$token'
     | '/app/trips/$tripId'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -209,6 +219,7 @@ export interface FileRouteTypes {
     | '/app/profile'
     | '/app/saved'
     | '/app/settings'
+    | '/shared/$token'
     | '/app/trips/$tripId'
   id:
     | '__root__'
@@ -228,6 +239,7 @@ export interface FileRouteTypes {
     | '/app/profile'
     | '/app/saved'
     | '/app/settings'
+    | '/shared/$token'
     | '/app/trips/$tripId'
   fileRoutesById: FileRoutesById
 }
@@ -237,6 +249,7 @@ export interface RootRouteChildren {
   ForgotPasswordRoute: typeof ForgotPasswordRoute
   LoginRoute: typeof LoginRoute
   SignupRoute: typeof SignupRoute
+  SharedTokenRoute: typeof SharedTokenRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -353,6 +366,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSettingsRouteImport
       parentRoute: typeof AppRouteRoute
     }
+    '/shared/$token': {
+      id: '/shared/$token'
+      path: '/shared/$token'
+      fullPath: '/shared/$token'
+      preLoaderRoute: typeof SharedTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/app/trips/$tripId': {
       id: '/app/trips/$tripId'
       path: '/trips/$tripId'
@@ -403,6 +423,7 @@ const rootRouteChildren: RootRouteChildren = {
   ForgotPasswordRoute: ForgotPasswordRoute,
   LoginRoute: LoginRoute,
   SignupRoute: SignupRoute,
+  SharedTokenRoute: SharedTokenRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

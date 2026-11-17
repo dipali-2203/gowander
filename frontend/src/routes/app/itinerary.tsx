@@ -14,8 +14,6 @@ import {
   Navigation,
   BedDouble,
   Wallet,
-  Pencil,
-  RefreshCw,
   Download,
   Share2,
 } from "lucide-react";
@@ -24,6 +22,15 @@ import { EmptyState, PageHeader } from "@/components/travel/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useTripStore } from "@/store/trip";
 import { riskAssessmentLabel, riskDetailsLabel, riskProxyLabel } from "@/lib/risk-display.js";
 import { readableErrorMessage } from "@/lib/error-message.js";
@@ -35,6 +42,9 @@ import {
   saveCompletedActivities,
   acceptWeatherReplan,
   rejectWeatherReplan,
+  downloadTripPdf,
+  createTripShareLink,
+  revokeTripShareLink,
   simulateReliability,
   submitPreferenceFeedback,
   type ReliabilityResult,
@@ -124,24 +134,27 @@ function WeatherForecastCard({
   const hasReadings = readings.some(([, value]) => value !== undefined && value !== null);
   const forecastTime = formatForecastTimestamp(item.scheduled_time ?? item.risk.forecast_time);
   return (
-    <article className="rounded-md border border-border p-3">
+    <article className="min-w-0 rounded-md border border-border p-3">
       <div className="flex items-center gap-2">
         <WeatherConditionIcon kind={item.risk.condition_kind} />
-        <div>
-          <h3 className="text-sm font-medium">{item.name}</h3>
-          <p className="text-xs text-muted-foreground">
+        <div className="min-w-0">
+          <h3 className="break-words text-sm font-medium">{item.name}</h3>
+          <p className="flex flex-wrap gap-x-1 text-xs text-muted-foreground">
             {item.risk.condition ?? "Condition unavailable"}
-            {forecastTime ? ` · ${forecastTime}` : ""}
+            {forecastTime ? <span>· {forecastTime}</span> : null}
           </p>
         </div>
       </div>
       {hasReadings ? (
-        <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-3">
+        <dl
+          className="mt-3 grid gap-x-3 gap-y-2 text-xs"
+          style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 7.5rem), 1fr))" }}
+        >
           {readings.map(([label, value, unit]) =>
             value === undefined || value === null ? null : (
-              <div key={label}>
-                <dt className="text-muted-foreground">{label}</dt>
-                <dd className="font-medium">
+              <div key={label} className="min-w-0">
+                <dt className="break-words leading-4 text-muted-foreground">{label}</dt>
+                <dd className="whitespace-nowrap font-medium">
                   {value}
                   {unit}
                 </dd>
@@ -154,11 +167,6 @@ function WeatherForecastCard({
           Weather information unavailable for this activity.
         </p>
       )}
-      {!item.risk.known || item.risk.confidence === "partial" ? (
-        <p className="mt-2 text-xs text-muted-foreground">
-          Forecast coverage is partial; unavailable fields are not assumed to be zero.
-        </p>
-      ) : null}
       {item.risk.advisories.map((advisory, index) => (
         <div
           key={`${advisory.type}-${index}`}
@@ -212,6 +220,10 @@ function Itinerary() {
   const itineraryRevisionsByTrip = useRef(new Map<number, number>());
   const [weatherProposal, setWeatherProposal] = useState<WeatherReplanProposal | null>(null);
   const [weatherUnavailableDay, setWeatherUnavailableDay] = useState<number | null>(null);
+  const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  const [shareUrl, setShareUrl] = useState("");
+  const [shareBusy, setShareBusy] = useState(false);
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
   const resolvedWeatherProposalIds = useRef(new Set<string>());
   const restorePendingWeatherProposal = (
     proposal: WeatherReplanProposal | null,
@@ -350,6 +362,56 @@ function Itinerary() {
       setReplanning(false);
     }
   };
+  const exportPdf = async () => {
+    if (!selectedTripId) return;
+    setDownloadingPdf(true);
+    try {
+      await downloadTripPdf(selectedTripId);
+      toast.success("Your latest saved itinerary PDF is ready.");
+    } catch (error) {
+      toast.error(readableErrorMessage(error, "Could not download the itinerary PDF."));
+    } finally {
+      setDownloadingPdf(false);
+    }
+  };
+  const generateShareLink = async () => {
+    if (!selectedTripId) return;
+    setShareBusy(true);
+    try {
+      const result = await createTripShareLink(selectedTripId);
+      const url = new URL(`/shared/${encodeURIComponent(result.token)}`, window.location.origin);
+      setShareUrl(url.toString());
+      toast.success(
+        result.reused ? "Existing share link loaded." : "Read-only share link created.",
+      );
+    } catch (error) {
+      toast.error(readableErrorMessage(error, "Could not create a share link."));
+    } finally {
+      setShareBusy(false);
+    }
+  };
+  const copyShareLink = async () => {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      toast.success("Share link copied.");
+    } catch {
+      toast.error("Clipboard access is unavailable. Select and copy the link from the field.");
+    }
+  };
+  const revokeShareLink = async () => {
+    if (!selectedTripId || !shareUrl) return;
+    setShareBusy(true);
+    try {
+      await revokeTripShareLink(selectedTripId);
+      setShareUrl("");
+      toast.success("Share link revoked.");
+    } catch (error) {
+      toast.error(readableErrorMessage(error, "Could not revoke the share link."));
+    } finally {
+      setShareBusy(false);
+    }
+  };
   const toggleCompleted = async (attractionId: string) => {
     if (!generated || !selectedTripId) return;
     const next = completedAttractionIds.includes(attractionId)
@@ -480,17 +542,6 @@ function Itinerary() {
     travelTime: `${day.total_travel_minutes} min`,
     distance: `${day.reserved_break_minutes} min meal/rest time`,
     hotel: "Accommodation is outside this baseline optimizer",
-    weatherSummary: day.stops.flatMap((stop) =>
-      stop.weather_assessment
-        ? [
-            {
-              name: stop.name,
-              scheduled_time: stop.weather_assessment.forecast_time,
-              risk: stop.weather_assessment,
-            },
-          ]
-        : [],
-    ),
     cost: day.total_cost,
     slots: [
       ...day.stops.map((stop) => ({
@@ -498,7 +549,7 @@ function Itinerary() {
         time: `${formatClock(stop.arrival_minute)}–${formatClock(stop.departure_minute)}`,
         attractionId: stop.attraction_id,
         title: stop.name,
-        detail: `${stop.departure_minute - stop.arrival_minute} min ${planningAttractions.find((item) => item.id === stop.attraction_id)?.visit_duration_known === false ? "planned (duration unknown; estimate)" : "visit"} · ${stop.travel_minutes_before} min estimated travel${stop.wait_minutes ? ` · ${stop.wait_minutes} min waiting${stop.wait_reason ? ` — ${stop.wait_reason}` : ""}` : ""}${stop.weather_assessment ? ` · Weather ${stop.weather_assessment["known"] === true ? `advisory: ${String(stop.weather_assessment["level"])}` : "data unavailable"}` : ""}`,
+        detail: `${stop.departure_minute - stop.arrival_minute} min ${planningAttractions.find((item) => item.id === stop.attraction_id)?.visit_duration_known === false ? "planned (duration unknown; estimate)" : "visit"} · ${stop.travel_minutes_before} min estimated travel${stop.wait_minutes ? ` · ${stop.wait_minutes} min waiting${stop.wait_reason ? ` — ${stop.wait_reason}` : ""}` : ""}`,
         cost: stop.cost,
       })),
       ...(day.stops.length > 0 ? day.meal_breaks : []).map((meal) => ({
@@ -583,16 +634,20 @@ function Itinerary() {
         description={`${generated.days.length} days · ${generated.days[0]?.date ?? ""} to ${generated.days.at(-1)?.date ?? ""} · Greedy baseline · ${generated.feasible ? "constraints met" : "incomplete or infeasible"} · ${generated.data_source} attraction data`}
         actions={
           <>
-            <Button variant="outline" onClick={() => toast("Editing mode is a demo stub")}>
-              <Pencil className="h-4 w-4" /> Edit
+            <Button
+              variant="outline"
+              disabled={!selectedTripId || downloadingPdf}
+              onClick={() => void exportPdf()}
+            >
+              <Download className="h-4 w-4" /> {downloadingPdf ? "Preparing PDF…" : "Download PDF"}
             </Button>
-            <Button variant="outline" onClick={() => toast.success("Regenerating with AI…")}>
-              <RefreshCw className="h-4 w-4" /> Regenerate
-            </Button>
-            <Button variant="outline" onClick={() => toast.success("PDF export queued")}>
-              <Download className="h-4 w-4" /> Download
-            </Button>
-            <Button onClick={() => toast.success("Share link copied")}>
+            <Button
+              disabled={!selectedTripId}
+              onClick={() => {
+                setShareUrl("");
+                setShareDialogOpen(true);
+              }}
+            >
               <Share2 className="h-4 w-4" /> Share
             </Button>
           </>
@@ -710,24 +765,6 @@ function Itinerary() {
                   </div>
                 </header>
 
-                {day.weatherSummary.length > 0 ? (
-                  <section
-                    className="space-y-2 border-b border-border p-4"
-                    aria-label={`Weather forecast for Day ${day.day}`}
-                  >
-                    <h3 className="text-sm font-medium">Forecast for scheduled activities</h3>
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      {day.weatherSummary.map((item) => (
-                        <WeatherForecastCard key={item.name} item={item} />
-                      ))}
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      Open-Meteo · Weather data by Open-Meteo.com (CC BY 4.0) · Forecast values are
-                      estimates, not guarantees.
-                    </p>
-                  </section>
-                ) : null}
-
                 <div className="divide-y divide-border">
                   {day.slots.map((slot) => (
                     <div
@@ -817,10 +854,20 @@ function Itinerary() {
               </p>
             ) : null}
             {weatherProposal.forecast_available ? (
-              <div className="grid gap-2 sm:grid-cols-2">
-                {weatherProposal.weather_summary.map((item) => (
-                  <WeatherForecastCard key={item.attraction_id} item={item} />
-                ))}
+              <div className="space-y-2">
+                <div className="grid grid-cols-1 gap-3 2xl:grid-cols-2">
+                  {weatherProposal.weather_summary.map((item) => (
+                    <WeatherForecastCard key={item.attraction_id} item={item} />
+                  ))}
+                </div>
+                {weatherProposal.weather_summary.some(
+                  (item) => !item.risk.known || item.risk.confidence === "partial",
+                ) ? (
+                  <p className="text-xs text-muted-foreground">
+                    Forecast coverage is partial for one or more activities. Unavailable readings
+                    are omitted and are not treated as zero.
+                  </p>
+                ) : null}
               </div>
             ) : null}
             {weatherProposal.changes.length ? (
@@ -1303,6 +1350,52 @@ function Itinerary() {
           </details>
         </aside>
       </div>
+      <Dialog open={shareDialogOpen} onOpenChange={setShareDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Share this itinerary</DialogTitle>
+            <DialogDescription>
+              Anyone with this link can view the itinerary. It does not grant permission to change
+              your saved trip.
+            </DialogDescription>
+          </DialogHeader>
+          {shareUrl ? (
+            <Input
+              aria-label="Read-only share link"
+              readOnly
+              value={shareUrl}
+              onFocus={(event) => event.currentTarget.select()}
+            />
+          ) : (
+            <p className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
+              Generate a secure, read-only link. You can revoke it at any time.
+            </p>
+          )}
+          <DialogFooter>
+            {shareUrl ? (
+              <>
+                <Button variant="outline" disabled={shareBusy} onClick={() => void copyShareLink()}>
+                  Copy link
+                </Button>
+                <Button
+                  variant="destructive"
+                  disabled={shareBusy}
+                  onClick={() => void revokeShareLink()}
+                >
+                  Revoke link
+                </Button>
+              </>
+            ) : (
+              <Button
+                disabled={shareBusy || !selectedTripId}
+                onClick={() => void generateShareLink()}
+              >
+                {shareBusy ? "Generating…" : "Generate share link"}
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

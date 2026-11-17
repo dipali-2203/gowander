@@ -15,7 +15,10 @@ test("unavailable forecast data is disclosed, and revisions require explicit acc
   assert.match(ui, /Weather information unavailable/);
   assert.match(ui, /Accept revision/);
   assert.match(ui, /Keep current itinerary/);
-  assert.match(ui, /weather_assessment\["known"\] === true/);
+  assert.doesNotMatch(
+    ui,
+    /weather_assessment\["known"\]|Weather advisory:|Weather data unavailable"\s*:/,
+  );
   assert.match(api, /replan\/weather\/accept/);
   assert.match(api, /replan\/weather\/reject/);
 });
@@ -47,6 +50,7 @@ test("normal and advanced itinerary views never render weather response JSON", (
 });
 
 test("weather advisory summaries preserve reason, forecast time and alternative status", () => {
+  assert.match(ui, /weatherProposal\.weather_summary\.map/);
   assert.match(ui, /advisoryLabel\(advisory\.type\)/);
   assert.match(ui, /change\.weather_risk\?\.forecast_time/);
   assert.match(ui, /Alternative found:/);

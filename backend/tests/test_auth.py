@@ -461,7 +461,13 @@ def test_weather_proposal_is_separate_until_accept_and_persists_revision(client:
         json={"completed_attraction_ids": ["gallery"], "itinerary_revision": 1})
     assert marked.status_code == 200
     assert client.get(f"/api/v1/trips/{trip_id}").json()["completed_attraction_ids"] == ["gallery"]
-    next_proposal = client.post(f"/api/v1/trips/{trip_id}/replan/weather", headers={"Origin": ORIGIN}, json={"day_number": 1}).json()
+    next_proposal_response = client.post(
+        f"/api/v1/trips/{trip_id}/replan/weather",
+        headers={"Origin": ORIGIN},
+        json={"day_number": 1},
+    )
+    assert next_proposal_response.status_code == 200, next_proposal_response.text
+    next_proposal = next_proposal_response.json()
     rejected = client.post(f"/api/v1/trips/{trip_id}/replan/weather/reject", headers={"Origin": ORIGIN},
         json={"proposal_id": next_proposal["proposal_id"], "base_revision": next_proposal["base_revision"]})
     assert rejected.status_code == 200
@@ -476,6 +482,149 @@ def test_weather_proposal_is_separate_until_accept_and_persists_revision(client:
         json={"proposal_id": stale_proposal["proposal_id"], "base_revision": stale_proposal["base_revision"]})
     assert stale_accept.status_code == 404
     assert client.get(f"/api/v1/trips/{trip_id}").json()["latest_itinerary"] == saved["latest_itinerary"]
+
+
+def test_authenticated_pdf_export_uses_latest_persisted_one_and_multi_day_plans(client: TestClient):
+    import re
+
+    from app.database import get_db
+    from app.models import Trip
+    from app.services.itinerary_pdf import _document_lines, _inr
+
+    assert signup(client, "pdf-export@example.com").status_code == 201
+    created = client.post("/api/v1/trips", headers={"Origin": ORIGIN}, json={
+        "name": "Lake break", "origin": "Delhi", "destination": "Udaipur",
+        "start_date": "2026-12-01", "end_date": "2026-12-02", "budget": 50000,
+        "available_minutes_per_day": 1200, "start_latitude": 24.58, "start_longitude": 73.68,
+        "planning_options": {"traveler_count": 3},
+    })
+    trip_id = created.json()["id"]
+    db = next(app.dependency_overrides[get_db]())
+    trip = db.get(Trip, trip_id)
+    trip.planning_inputs = {"attractions": [
+        {"id": "internal-stop-id", "name": "Revised Palace", "cost_known": True,
+         "data_source": "osm", "attribution": "© OpenStreetMap contributors"},
+    ]}
+    trip.latest_itinerary = {
+        "budget_estimate": {
+            "total_estimated": 12500, "per_person": 4167, "daily_average": 6250,
+            "categories": [{"label": "Accommodation", "amount": 8000, "assumptions": ["Standard stay"]}],
+            "exclusions": ["Intercity travel is excluded."],
+        },
+        "days": [{
+            "day_number": 1, "date": "2026-12-01", "total_travel_minutes": 35,
+            "reserved_break_minutes": 60, "meal_breaks": [{"start_minute": 780, "duration_minutes": 60}],
+            "stops": [{
+                "attraction_id": "internal-stop-id", "name": "Revised Palace",
+                "arrival_minute": 600, "departure_minute": 690, "travel_minutes_before": 15,
+                "cost": 300, "weather_assessment": {"provider": "open-meteo", "forecast_time": "2026-12-01T10:00",
+                    "condition": "Heavy rain", "advisories": [{"type": "rain", "description": "Rain may affect outdoor visits."}]},
+            }],
+        }],
+    }
+    assert "Revised Palace" in " ".join(text for _, text in _document_lines(trip))
+    assert "₹12,500" == _inr(12500)
+    db.commit()
+    db.close()
+
+    one_day = client.get(f"/api/v1/trips/{trip_id}/export.pdf", headers={"Origin": ORIGIN})
+    assert one_day.status_code == 200
+    assert one_day.headers["content-type"].startswith("application/pdf")
+    assert "attachment" in one_day.headers["content-disposition"]
+    assert one_day.content.startswith(b"%PDF-")
+    assert len(re.findall(rb"/Type\s+/Page(?!s)\b", one_day.content)) == 1
+
+    db = next(app.dependency_overrides[get_db]())
+    trip = db.get(Trip, trip_id)
+    trip.end_date = date(2026, 12, 2)
+    trip.latest_itinerary = {**trip.latest_itinerary, "days": [*trip.latest_itinerary["days"], {
+        "day_number": 2, "date": "2026-12-02", "total_travel_minutes": 40,
+        "reserved_break_minutes": 0, "meal_breaks": [],
+        "stops": [
+            {"attraction_id": f"private-id-{index}", "name": f"Lake activity {index}",
+             "arrival_minute": 540 + index * 20, "departure_minute": 555 + index * 20,
+             "travel_minutes_before": 8, "cost": 0}
+            for index in range(35)
+        ],
+    }]}
+    db.commit()
+    db.close()
+    multi_day = client.get(f"/api/v1/trips/{trip_id}/export.pdf", headers={"Origin": ORIGIN})
+    assert multi_day.status_code == 200
+    assert multi_day.content.startswith(b"%PDF-")
+    assert len(re.findall(rb"/Type\s+/Page(?!s)\b", multi_day.content)) >= 2
+
+
+def test_share_links_are_private_to_owners_reusable_revocable_and_read_only(client: TestClient, monkeypatch):
+    from app.database import get_db
+    from app.models import Trip, TripShare
+
+    monkeypatch.setenv("TRIP_SHARE_SECRET", "test-share-signing-key-that-is-at-least-32-chars")
+    assert signup(client, "share-owner@example.com").status_code == 201
+    created = client.post("/api/v1/trips", headers={"Origin": ORIGIN}, json={
+        "name": "Private preferences stay private", "origin": "Delhi", "destination": "Udaipur",
+        "start_date": "2026-12-01", "end_date": "2026-12-01", "budget": 50000,
+        "available_minutes_per_day": 1200, "start_latitude": 24.58, "start_longitude": 73.68,
+        "preferences": {"interests": {"private_interest": 1}},
+        "planning_options": {"traveler_count": 2},
+    })
+    trip_id = created.json()["id"]
+    db = next(app.dependency_overrides[get_db]())
+    trip = db.get(Trip, trip_id)
+    trip.latest_itinerary = {"days": [{
+        "day_number": 1, "date": "2026-12-01", "total_travel_minutes": 10,
+        "meal_breaks": [], "stops": [{
+            "attraction_id": "must-not-leak", "name": "City Palace", "arrival_minute": 600,
+            "departure_minute": 660, "travel_minutes_before": 10, "cost": 0,
+        }],
+    }]}
+    trip.planning_inputs = {"attractions": []}
+    db.commit()
+    db.close()
+
+    first = client.post(f"/api/v1/trips/{trip_id}/share-link", headers={"Origin": ORIGIN})
+    assert first.status_code == 200, first.text
+    token = first.json()["token"]
+    assert first.json()["reused"] is False
+    second = client.post(f"/api/v1/trips/{trip_id}/share-link", headers={"Origin": ORIGIN})
+    assert second.status_code == 200
+    assert second.json() == {"token": token, "reused": True}
+
+    db = next(app.dependency_overrides[get_db]())
+    saved_share = db.query(TripShare).one()
+    assert saved_share.public_id in token
+    assert token != saved_share.public_id
+    assert not hasattr(saved_share, "token")
+    db.close()
+
+    client.cookies.clear()
+    public = client.get(f"/api/v1/shared/{token}")
+    assert public.status_code == 200, public.text
+    public_body = public.json()
+    assert public_body["title"] == "Private preferences stay private"
+    assert public_body["days"][0]["stops"][0]["name"] == "City Palace"
+    assert "preferences" not in public_body
+    assert "trip_id" not in public_body
+    assert "traveler_email" not in public_body
+    assert "attraction_id" not in public_body["days"][0]["stops"][0]
+    assert client.post(f"/api/v1/shared/{token}").status_code == 405
+    assert client.get(f"/api/v1/shared/{token}invalid").status_code == 404
+
+    assert signup(client, "share-other@example.com").status_code == 201
+    cross_owner = client.delete(f"/api/v1/trips/{trip_id}/share-link", headers={"Origin": ORIGIN})
+    assert cross_owner.status_code == 404
+    assert client.post(f"/api/v1/trips/{trip_id}/share-link", headers={"Origin": ORIGIN}).status_code == 404
+
+    assert client.post("/api/v1/auth/login", headers={"Origin": ORIGIN}, json={
+        "email": "share-owner@example.com", "password": "a-long-password-123",
+    }).status_code == 200
+    revoked = client.delete(f"/api/v1/trips/{trip_id}/share-link", headers={"Origin": ORIGIN})
+    assert revoked.status_code == 200
+    assert client.get(f"/api/v1/shared/{token}").status_code == 404
+    again = client.post(f"/api/v1/trips/{trip_id}/share-link", headers={"Origin": ORIGIN})
+    assert again.status_code == 200
+    assert again.json()["token"] != token
+    assert client.get(f"/api/v1/shared/{again.json()['token']}").status_code == 200
 
 
 def test_login_rejects_bad_password_and_logout_revokes_session(client: TestClient):

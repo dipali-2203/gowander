@@ -336,6 +336,43 @@ export type TripDetails = AccountTrip & {
   } | null;
 };
 
+export type SharedItinerary = {
+  title: string;
+  origin: string;
+  destination: string;
+  start_date: string;
+  end_date: string;
+  traveler_count: number | null;
+  days: Array<{
+    day_number: number;
+    date: string;
+    stops: Array<{
+      name: string;
+      arrival_minute: number;
+      departure_minute: number;
+      visit_minutes: number;
+      travel_minutes_before: number;
+      weather_advisories: Array<{
+        type: string;
+        description: string;
+        condition: string | null;
+        forecast_time: string | null;
+      }>;
+    }>;
+    meal_breaks: Array<{ start_minute: number; duration_minutes: number }>;
+    total_travel_minutes: number;
+  }>;
+  budget_estimate: {
+    currency: "INR";
+    total_estimated: number | null;
+    per_person: number | null;
+    daily_average: number | null;
+    categories: Array<{ label: string | null; amount: number | null }>;
+    exclusions: string[];
+  } | null;
+  attributions: string[];
+};
+
 const apiBaseUrl = import.meta.env["VITE_API_BASE_URL"] ?? "http://localhost:8000";
 export const googleSignInStartUrl = `${apiBaseUrl}/api/v1/auth/google/start`;
 
@@ -466,6 +503,57 @@ export async function getUserTrips() {
 
 export async function getTrip(tripId: number) {
   return request<TripDetails>(`/api/v1/trips/${tripId}`);
+}
+
+export function createTripShareLink(tripId: number) {
+  return request<{ token: string; reused: boolean }>(`/api/v1/trips/${tripId}/share-link`, {
+    method: "POST",
+  });
+}
+
+export function revokeTripShareLink(tripId: number) {
+  return request<{ revoked: boolean }>(`/api/v1/trips/${tripId}/share-link`, {
+    method: "DELETE",
+  });
+}
+
+export function getSharedItinerary(token: string) {
+  return request<SharedItinerary>(`/api/v1/shared/${encodeURIComponent(token)}`, {
+    credentials: "omit",
+    referrerPolicy: "no-referrer",
+  });
+}
+
+export async function downloadTripPdf(tripId: number) {
+  let response: Response;
+  try {
+    response = await fetch(`${apiBaseUrl}/api/v1/trips/${tripId}/export.pdf`, {
+      credentials: "include",
+      headers: { accept: "application/pdf" },
+    });
+  } catch {
+    throw new Error(
+      `Cannot reach the trip service at ${apiBaseUrl}. Check that the backend is running and allows this frontend origin.`,
+    );
+  }
+  if (!response.ok) {
+    const body: unknown = await response.json().catch(() => null);
+    throw new Error(
+      readableErrorMessage(
+        body,
+        `The itinerary PDF could not be downloaded (HTTP ${response.status}).`,
+      ),
+    );
+  }
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1];
+  anchor.href = objectUrl;
+  anchor.download = filename || "gowander-itinerary.pdf";
+  anchor.click();
+  URL.revokeObjectURL(objectUrl);
 }
 
 export function getAttractionCatalog(destination: string) {

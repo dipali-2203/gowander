@@ -48,6 +48,26 @@ class Trip(Base):
     )
 
 
+class TripShare(Base):
+    """A revocable public capability; only its random id is persisted."""
+
+    __tablename__ = "trip_shares"
+    __table_args__ = (
+        UniqueConstraint("trip_id", name="uq_trip_shares_trip"),
+        UniqueConstraint("public_id", name="uq_trip_shares_public_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    trip_id: Mapped[int] = mapped_column(
+        ForeignKey("trips.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    public_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class User(Base):
     __tablename__ = "users"
 

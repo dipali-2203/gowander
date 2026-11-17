@@ -1,11 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 import os
 from datetime import datetime, timezone
 
 from app.database import get_db
-from app.models import Trip, Attraction, User
+from app.models import Trip, TripShare, Attraction, User
 from app.api.auth import get_current_user, require_trip_access
 from app.schemas import (
     AttractionInput,
@@ -42,6 +42,8 @@ from app.services.budget import attraction_budget_after_fixed_costs, estimate_tr
 from app.schemas import CompletedActivitiesRequest, WeatherReplanRequest, WeatherProposalAction
 from app.services.weather import WeatherProviderError
 from app.services.weather_replanning import build_weather_proposal
+from app.services.trip_sharing import build_share_token, new_public_id
+from app.services.itinerary_pdf import itinerary_pdf_filename, render_itinerary_pdf
 from sqlalchemy import update
 
 router = APIRouter(prefix="/api/v1/trips", tags=["Trips"], dependencies=[Depends(require_trip_access)])
@@ -243,6 +245,51 @@ def get_trip(
         "pending_itinerary_revision": trip.pending_itinerary_revision,
         "itinerary_history": trip.itinerary_history or [],
     }
+
+
+@router.post("/{trip_id}/share-link")
+def create_trip_share_link(trip_id: int, db: Session = Depends(get_db)):
+    trip = db.get(Trip, trip_id)
+    if trip is None:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    if not trip.latest_itinerary:
+        raise HTTPException(status_code=409, detail="Save an itinerary before creating a share link.")
+    share = db.query(TripShare).filter(TripShare.trip_id == trip.id).one_or_none()
+    reused = share is not None and share.revoked_at is None
+    if share is None:
+        share = TripShare(trip_id=trip.id, public_id=new_public_id())
+        db.add(share)
+    elif share.revoked_at is not None:
+        share.public_id = new_public_id()
+        share.created_at = datetime.now(timezone.utc)
+        share.revoked_at = None
+    token = build_share_token(share.public_id, trip.id)
+    db.commit()
+    return {"token": token, "reused": reused}
+
+
+@router.delete("/{trip_id}/share-link")
+def revoke_trip_share_link(trip_id: int, db: Session = Depends(get_db)):
+    share = db.query(TripShare).filter(TripShare.trip_id == trip_id).one_or_none()
+    if share is not None and share.revoked_at is None:
+        share.revoked_at = datetime.now(timezone.utc)
+        db.commit()
+    return {"revoked": True}
+
+
+@router.get("/{trip_id}/export.pdf")
+def export_trip_pdf(trip_id: int, db: Session = Depends(get_db)):
+    trip = db.get(Trip, trip_id)
+    if trip is None:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    if not trip.latest_itinerary:
+        raise HTTPException(status_code=409, detail="Save an itinerary before downloading a PDF.")
+    filename = itinerary_pdf_filename(trip)
+    return Response(
+        content=render_itinerary_pdf(trip),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.put("/{trip_id}")
