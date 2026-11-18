@@ -22,6 +22,7 @@ import {
   YAxis,
 } from "recharts";
 import { EmptyState, PageHeader } from "@/components/travel/PageHeader";
+import { TripBudgetEstimatePanel } from "@/components/travel/TripBudgetEstimatePanel";
 import { Button } from "@/components/ui/button";
 import { getTrip, getUserTrips, type AccountTrip, type TripDetails } from "@/lib/api";
 import { budgetStatus, buildBudgetDashboard } from "@/lib/budget-dashboard.mjs";
@@ -123,7 +124,7 @@ function Budget() {
         />
       ) : (
         <>
-          <section aria-label="Budget summary" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <section aria-label="Budget summary" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
             <SummaryCard
               label="Total Planned Budget"
               value={inr(dashboard.allocatedBudget)}
@@ -131,12 +132,22 @@ function Budget() {
               icon={<Wallet />}
             />
             <SummaryCard
-              label="Estimated Trip Cost"
+              label="Complete Trip Cost"
               value={dashboard.estimatedTripCount ? inr(dashboard.estimatedCost) : "Unavailable"}
+              hint={`Calculable complete totals for ${dashboard.estimatedTripCount} of ${trips.length} trips`}
+              icon={<CircleDollarSign />}
+            />
+            <SummaryCard
+              label="Legacy Destination Estimates"
+              value={
+                dashboard.legacyEstimateTripCount
+                  ? inr(dashboard.legacyDestinationCost)
+                  : "Unavailable"
+              }
               hint={
-                dashboard.estimatedTripCount === trips.length
-                  ? "Current itinerary estimates"
-                  : `Available for ${dashboard.estimatedTripCount} of ${trips.length} trips`
+                dashboard.legacyEstimateTripCount
+                  ? `${dashboard.legacyEstimateTripCount} trip(s); intercity costs excluded and kept separate`
+                  : "No legacy destination-only estimates"
               }
               icon={<CircleDollarSign />}
             />
@@ -147,7 +158,7 @@ function Budget() {
               }
               hint={
                 dashboard.remainingBudget === null
-                  ? "Requires estimates for every saved trip"
+                  ? "Requires a current calculable complete budget for every saved trip"
                   : dashboard.remainingBudget < 0
                     ? "Estimated costs exceed allocation"
                     : "Planned budget less estimates"
@@ -166,8 +177,8 @@ function Budget() {
               value={dashboard.dailyAverage === null ? "Unavailable" : inr(dashboard.dailyAverage)}
               hint={
                 dashboard.dailyAverage === null
-                  ? "No trip duration estimate available"
-                  : "Estimated cost per travel day"
+                  ? "No current complete trip duration estimate available"
+                  : `Based on ${dashboard.estimatedTripCount} calculable complete budget(s)`
               }
               icon={<CalendarDays />}
             />
@@ -177,7 +188,13 @@ function Budget() {
             <section className="surface min-w-0 p-5 sm:p-6">
               <SectionHeading
                 title="Expense breakdown"
-                subtitle="Estimated categories from your saved trip itineraries"
+                subtitle={
+                  dashboard.categoryDataScope === "complete_trip"
+                    ? "Current complete-trip categories; legacy destination estimates are not mixed in"
+                    : dashboard.categoryDataScope === "destination_only"
+                      ? "Legacy destination-only categories; intercity travel is excluded"
+                      : "No current budget categories are available"
+                }
                 icon={<ChartNoAxesCombined />}
               />
               {categoryTotal > 0 ? (
@@ -238,10 +255,11 @@ function Budget() {
                   Category estimates are not available yet.
                 </div>
               )}
-              {dashboard.estimatedTripCount < trips.length && (
+              {dashboard.categoryEstimateTripCount < trips.length && (
                 <p className="mt-4 text-xs text-muted-foreground">
-                  Breakdown includes only trips with a current budget estimate (
-                  {dashboard.estimatedTripCount}/{trips.length}).
+                  Breakdown uses {dashboard.categoryEstimateTripCount} trip(s) with compatible
+                  category estimates. Incomplete, stale, and other-scope estimates are not mixed
+                  into these category totals.
                 </p>
               )}
               {trips.some(
@@ -251,6 +269,19 @@ function Budget() {
                 <p className="mt-3 rounded-lg bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-200">
                   Some attraction fees are unknown and excluded from confirmed costs. A zero ticket
                   estimate does not mean entry is free.
+                </p>
+              )}
+              {dashboard.incompleteBudgetTripCount > 0 && (
+                <p className="mt-3 rounded-lg bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-200">
+                  {dashboard.incompleteBudgetTripCount} current complete-budget estimate(s) have
+                  unavailable or partial categories. Those costs are not counted as zero in complete
+                  trip totals.
+                </p>
+              )}
+              {dashboard.staleTripCount > 0 && (
+                <p className="mt-3 rounded-lg bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-200">
+                  {dashboard.staleTripCount} saved trip(s) have outdated itinerary estimates and are
+                  excluded until regenerated.
                 </p>
               )}
             </section>
@@ -416,8 +447,9 @@ function Budget() {
                 </>
               ) : (
                 <p className="mt-5 rounded-xl border border-dashed border-border p-5 text-sm text-muted-foreground">
-                  A complete estimate for every saved trip is needed to calculate combined budget
-                  health.
+                  Current calculable complete-trip estimates for every saved trip are needed to
+                  calculate combined budget health. Legacy destination estimates are shown
+                  separately and are not used as journey-wide totals.
                 </p>
               )}
               <div className="mt-5 space-y-3 border-t border-border pt-4">
@@ -547,9 +579,19 @@ function SectionHeading({
 
 function TripBudgetCard({ trip }: { trip: AccountTrip }) {
   const estimate = trip.latest_itinerary?.budget_estimate;
-  const total = estimate?.total_estimated;
-  const remaining = typeof total === "number" ? trip.budget - total : null;
-  const status = typeof total === "number" ? budgetStatus(total, trip.budget) : null;
+  const completeBudget = estimate?.complete_budget;
+  const completeIsCurrent = Boolean(completeBudget && trip.complete_budget_current);
+  const total = completeIsCurrent ? completeBudget?.total_estimate : null;
+  const remaining =
+    completeIsCurrent && typeof completeBudget?.remaining_budget === "number"
+      ? completeBudget.remaining_budget
+      : null;
+  const status =
+    completeIsCurrent && typeof total === "number" && completeBudget?.within_budget !== null
+      ? completeBudget?.within_budget === false
+        ? { label: "Over Budget", tone: "danger" as const }
+        : { label: "Within Budget Estimate", tone: "success" as const }
+      : null;
   const start = Date.parse(`${trip.start_date}T00:00:00Z`);
   const end = Date.parse(`${trip.end_date}T00:00:00Z`);
   const days =
@@ -582,8 +624,16 @@ function TripBudgetCard({ trip }: { trip: AccountTrip }) {
       <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3">
         <Metric label="Allocated" value={inr(trip.budget)} />
         <Metric
-          label="Current estimated trip cost"
-          value={typeof total === "number" ? inr(total) : "Unavailable"}
+          label="Current complete trip cost"
+          value={
+            typeof total === "number"
+              ? inr(total)
+              : completeBudget && completeIsCurrent
+                ? "Incomplete"
+                : completeBudget
+                  ? "Refresh required"
+                  : "Unavailable"
+          }
         />
         <Metric
           label="Remaining"
@@ -596,6 +646,28 @@ function TripBudgetCard({ trip }: { trip: AccountTrip }) {
           {estimate?.unknown_attraction_fee_count} scheduled attraction fee(s) are unknown and not
           included as confirmed costs.
         </p>
+      )}
+      {!completeBudget &&
+        typeof estimate?.total_estimated === "number" &&
+        trip.itinerary_stale !== true && (
+          <p className="mt-3 text-xs text-muted-foreground">
+            Legacy destination-only estimate: {inr(estimate.total_estimated)}. Intercity outbound
+            and return costs are excluded.
+          </p>
+        )}
+      {estimate && (
+        <details className="mt-3">
+          <summary className="cursor-pointer text-xs font-medium text-primary">
+            Budget details
+          </summary>
+          <div className="mt-3">
+            <TripBudgetEstimatePanel
+              estimate={estimate}
+              completeBudgetCurrent={trip.complete_budget_current}
+              estimateIsCurrent={trip.itinerary_stale !== true}
+            />
+          </div>
+        </details>
       )}
       {trip.selected_accommodation && (
         <p className="mt-2 text-xs text-muted-foreground">

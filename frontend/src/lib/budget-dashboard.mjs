@@ -1,27 +1,48 @@
 const CATEGORY_DEFINITIONS = [
+  { key: "intercity_outbound", label: "Intercity · outbound", color: "#6366f1" },
+  { key: "intercity_return", label: "Intercity · return", color: "#8b5cf6" },
+  { key: "local_transport", label: "Local transportation", color: "#0ea5e9" },
   { key: "accommodation", label: "Accommodation", color: "#f97316" },
-  { key: "transportation", label: "Transport", color: "#0ea5e9" },
-  { key: "meals", label: "Food", color: "#22c55e" },
-  { key: "attractions", label: "Tickets / Attractions", color: "#a855f7" },
+  { key: "food", label: "Food", color: "#22c55e" },
+  { key: "attraction_fees", label: "Attraction fees", color: "#a855f7" },
   { key: "miscellaneous", label: "Miscellaneous", color: "#eab308" },
 ];
 
 const finite = (value) => typeof value === "number" && Number.isFinite(value);
 
 export function buildBudgetDashboard(trips, tripDetails = []) {
-  const estimatedTrips = trips.filter((trip) =>
-    finite(trip.latest_itinerary?.budget_estimate?.total_estimated),
+  const estimateFor = (trip) => trip.latest_itinerary?.budget_estimate;
+  const isCurrentComplete = (trip) =>
+    trip.complete_budget_current === true &&
+    trip.itinerary_stale !== true &&
+    Boolean(estimateFor(trip)?.complete_budget);
+  const currentCompleteTrips = trips.filter(isCurrentComplete);
+  const calculableTrips = currentCompleteTrips.filter((trip) =>
+    finite(estimateFor(trip).complete_budget.total_estimate),
   );
-  const estimatedCost = estimatedTrips.reduce(
-    (sum, trip) => sum + trip.latest_itinerary.budget_estimate.total_estimated,
+  const legacyTrips = trips.filter((trip) => {
+    const estimate = estimateFor(trip);
+    return (
+      trip.itinerary_stale !== true &&
+      !estimate?.complete_budget &&
+      finite(estimate?.total_estimated)
+    );
+  });
+  const staleTrips = trips.filter((trip) => trip.itinerary_stale === true && trip.latest_itinerary);
+  const estimatedCost = calculableTrips.reduce(
+    (sum, trip) => sum + estimateFor(trip).complete_budget.total_estimate,
     0,
   );
-  const allEstimatesAvailable = estimatedTrips.length === trips.length;
+  const legacyDestinationCost = legacyTrips.reduce(
+    (sum, trip) => sum + estimateFor(trip).total_estimated,
+    0,
+  );
+  const allEstimatesAvailable = trips.length === 0 || calculableTrips.length === trips.length;
   const allocatedBudget = trips.reduce(
     (sum, trip) => sum + (finite(trip.budget) ? trip.budget : 0),
     0,
   );
-  const travelDays = estimatedTrips.reduce((sum, trip) => {
+  const travelDays = calculableTrips.reduce((sum, trip) => {
     const start = Date.parse(`${trip.start_date}T00:00:00Z`);
     const end = Date.parse(`${trip.end_date}T00:00:00Z`);
     return (
@@ -32,16 +53,40 @@ export function buildBudgetDashboard(trips, tripDetails = []) {
     );
   }, 0);
 
+  const categoryTrips = currentCompleteTrips.length > 0 ? currentCompleteTrips : legacyTrips;
+  const categoryDataScope =
+    currentCompleteTrips.length > 0
+      ? "complete_trip"
+      : legacyTrips.length
+        ? "destination_only"
+        : "unavailable";
   const categorySums = new Map(CATEGORY_DEFINITIONS.map(({ key }) => [key, 0]));
   const categoryCoverage = new Map(CATEGORY_DEFINITIONS.map(({ key }) => [key, 0]));
-  for (const trip of estimatedTrips) {
-    const categories = trip.latest_itinerary?.budget_estimate?.categories;
+  const categoryPartial = new Map(CATEGORY_DEFINITIONS.map(({ key }) => [key, false]));
+  const legacyKeyMap = {
+    transportation: "local_transport",
+    meals: "food",
+    attractions: "attraction_fees",
+  };
+  for (const trip of categoryTrips) {
+    const estimate = estimateFor(trip);
+    const categories =
+      categoryDataScope === "complete_trip"
+        ? estimate?.complete_budget?.categories
+        : estimate?.categories;
     if (!Array.isArray(categories)) continue;
     for (const category of categories) {
-      if (categorySums.has(category.key) && finite(category.amount)) {
-        categorySums.set(category.key, categorySums.get(category.key) + category.amount);
-        categoryCoverage.set(category.key, categoryCoverage.get(category.key) + 1);
+      const key =
+        categoryDataScope === "complete_trip"
+          ? category.key
+          : (legacyKeyMap[category.key] ?? category.key);
+      if (!categorySums.has(key)) continue;
+      if (finite(category.amount)) {
+        categorySums.set(key, categorySums.get(key) + category.amount);
+        categoryCoverage.set(key, categoryCoverage.get(key) + 1);
       }
+      if (category.status === "partial" || category.status === "unavailable")
+        categoryPartial.set(key, true);
     }
   }
   const categories = CATEGORY_DEFINITIONS.map((definition) => ({
@@ -49,16 +94,26 @@ export function buildBudgetDashboard(trips, tripDetails = []) {
     amount: categoryCoverage.get(definition.key) ? categorySums.get(definition.key) : null,
     coverage: categoryCoverage.get(definition.key),
     partial:
-      categoryCoverage.get(definition.key) < estimatedTrips.length ||
-      (definition.key === "attractions" &&
-        estimatedTrips.some(
+      categoryCoverage.get(definition.key) < categoryTrips.length ||
+      categoryPartial.get(definition.key) ||
+      (definition.key === "attraction_fees" &&
+        categoryTrips.some(
           (trip) => (trip.latest_itinerary?.budget_estimate?.unknown_attraction_fee_count ?? 0) > 0,
         )),
-    percentage: estimatedCost > 0 ? (categorySums.get(definition.key) / estimatedCost) * 100 : 0,
+    percentage:
+      categorySums.get(definition.key) > 0
+        ? (categorySums.get(definition.key) /
+            Math.max(
+              1,
+              [...categorySums.values()].reduce((sum, amount) => sum + amount, 0),
+            )) *
+          100
+        : 0,
   }));
 
   const detailById = new Map(tripDetails.map((trip) => [trip.id, trip]));
   const dailyTrips = trips.flatMap((trip) => {
+    if (trip.itinerary_stale === true) return [];
     const days = trip.latest_itinerary?.days;
     if (!Array.isArray(days)) return [];
     const detail = detailById.get(trip.id);
@@ -109,11 +164,16 @@ export function buildBudgetDashboard(trips, tripDetails = []) {
 
   return {
     tripCount: trips.length,
-    estimatedTripCount: estimatedTrips.length,
+    estimatedTripCount: calculableTrips.length,
     estimatedCost,
+    legacyDestinationCost,
+    legacyEstimateTripCount: legacyTrips.length,
+    incompleteBudgetTripCount: currentCompleteTrips.length - calculableTrips.length,
+    staleTripCount: staleTrips.length,
     allocatedBudget,
     allEstimatesAvailable,
-    categoryEstimateTripCount: estimatedTrips.length,
+    categoryEstimateTripCount: categoryTrips.length,
+    categoryDataScope,
     remainingBudget: allEstimatesAvailable ? allocatedBudget - estimatedCost : null,
     dailyAverage: travelDays > 0 ? estimatedCost / travelDays : null,
     categories,

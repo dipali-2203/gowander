@@ -38,7 +38,7 @@ const trip = (
         },
 });
 
-test("one trip derives allocation, estimate, remaining and actual-duration daily average", () => {
+test("legacy destination totals stay separate from complete-trip totals", () => {
   const result = buildBudgetDashboard(
     [trip(1)],
     [
@@ -50,20 +50,23 @@ test("one trip derives allocation, estimate, remaining and actual-duration daily
   );
   assert.equal(result.tripCount, 1);
   assert.equal(result.allocatedBudget, 10_000);
-  assert.equal(result.estimatedCost, 8_500);
-  assert.equal(result.remainingBudget, 1_500);
-  assert.equal(result.dailyAverage, 4_250);
+  assert.equal(result.estimatedCost, 0);
+  assert.equal(result.legacyDestinationCost, 8_500);
+  assert.equal(result.remainingBudget, null);
+  assert.equal(result.dailyAverage, null);
   assert.deepEqual(
     result.dailyTrips[0]?.days.map((day) => day.cost),
     [750, 750],
   );
 });
 
-test("multiple trips aggregate values while missing estimates keep combined remaining unavailable", () => {
+test("multiple trips keep legacy estimates separate and combined complete remaining unavailable", () => {
   const result = buildBudgetDashboard([trip(1), trip(2, { cost: null })]);
   assert.equal(result.allocatedBudget, 20_000);
-  assert.equal(result.estimatedCost, 8_500);
-  assert.equal(result.estimatedTripCount, 1);
+  assert.equal(result.estimatedCost, 0);
+  assert.equal(result.legacyDestinationCost, 8_500);
+  assert.equal(result.legacyEstimateTripCount, 1);
+  assert.equal(result.estimatedTripCount, 0);
   assert.equal(result.remainingBudget, null);
   assert.equal(result.allEstimatesAvailable, false);
 });
@@ -93,8 +96,8 @@ test("missing category amounts are not converted to zero or represented as compl
       ],
     }),
   ]);
-  const transport = result.categories.find((category) => category.key === "transportation");
-  const food = result.categories.find((category) => category.key === "meals");
+  const transport = result.categories.find((category) => category.key === "local_transport");
+  const food = result.categories.find((category) => category.key === "food");
   assert.equal(transport?.amount, null);
   assert.equal(transport?.coverage, 0);
   assert.equal(food?.coverage, 0);
@@ -102,7 +105,7 @@ test("missing category amounts are not converted to zero or represented as compl
 
 test("ticket category is marked partial when unknown attraction fees were excluded", () => {
   const result = buildBudgetDashboard([trip(1, { unknownFees: 1 })]);
-  const tickets = result.categories.find((category) => category.key === "attractions");
+  const tickets = result.categories.find((category) => category.key === "attraction_fees");
   assert.equal(tickets?.partial, true);
 });
 
@@ -220,4 +223,58 @@ test("daily budget UI labels partial and unavailable days and lets travelers cho
   assert.match(budgetPage, /Cost unavailable/);
   assert.match(budgetPage, /Partial/);
   assert.match(budgetPage, /Unknown fees\s+are excluded/);
+});
+
+const completeTrip = (id, total, categories, options = {}) => ({
+  ...trip(id, { budget: options.budget ?? 10_000 }),
+  itinerary_stale: options.stale ?? false,
+  complete_budget_current: options.current ?? true,
+  latest_itinerary: {
+    ...trip(id).latest_itinerary,
+    budget_estimate: {
+      complete_budget: {
+        total_estimate: total,
+        categories,
+      },
+    },
+    days: trip(id).latest_itinerary.days,
+  },
+});
+
+test("current complete budgets aggregate across trips without mixing legacy destination estimates", () => {
+  const result = buildBudgetDashboard([
+    completeTrip(1, 5000, [
+      { key: "intercity_outbound", amount: 1000, status: "user_provided" },
+      { key: "food", amount: 1500, status: "estimated" },
+    ]),
+    trip(2, { cost: 7000 }),
+    completeTrip(3, 3000, [
+      { key: "intercity_outbound", amount: 500, status: "user_provided" },
+      { key: "food", amount: null, status: "unavailable" },
+    ]),
+  ]);
+  assert.equal(result.estimatedCost, 8000);
+  assert.equal(result.estimatedTripCount, 2);
+  assert.equal(result.legacyDestinationCost, 7000);
+  assert.equal(result.legacyEstimateTripCount, 1);
+  assert.equal(result.remainingBudget, null);
+  assert.equal(result.categoryDataScope, "complete_trip");
+  assert.equal(result.categories.find(({ key }) => key === "intercity_outbound")?.amount, 1500);
+  assert.equal(result.categories.find(({ key }) => key === "food")?.amount, 1500);
+  assert.equal(result.categories.find(({ key }) => key === "food")?.partial, true);
+});
+
+test("incomplete and stale complete budgets are not counted as complete totals or current daily groups", () => {
+  const result = buildBudgetDashboard([
+    completeTrip(1, null, [{ key: "intercity_return", amount: null, status: "unavailable" }]),
+    completeTrip(2, 4000, [{ key: "food", amount: 4000, status: "estimated" }], { stale: true }),
+  ]);
+  assert.equal(result.estimatedCost, 0);
+  assert.equal(result.incompleteBudgetTripCount, 1);
+  assert.equal(result.staleTripCount, 1);
+  assert.equal(result.remainingBudget, null);
+  assert.deepEqual(
+    result.dailyTrips.map(({ tripId }) => tripId),
+    [1],
+  );
 });

@@ -19,9 +19,9 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { EmptyState, PageHeader } from "@/components/travel/PageHeader";
+import { TripBudgetEstimatePanel } from "@/components/travel/TripBudgetEstimatePanel";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
 import {
   Dialog,
@@ -562,12 +562,16 @@ function Itinerary() {
       })),
     ].sort((left, right) => left.minute - right.minute),
   }));
+  const selectedSavedTrip = savedTrips.find((trip) => trip.id === selectedTripId);
   const budgetEstimate =
-    savedTrips.find((trip) => trip.id === selectedTripId)?.latest_itinerary?.budget_estimate ??
-    generated.budget_estimate;
-  const selectedAccommodation = savedTrips.find(
-    (trip) => trip.id === selectedTripId,
-  )?.selected_accommodation;
+    selectedSavedTrip?.latest_itinerary?.budget_estimate ?? generated.budget_estimate;
+  const budgetEstimateIsCurrent = selectedSavedTrip
+    ? selectedSavedTrip.itinerary_stale !== true
+    : Boolean(generated.budget_estimate);
+  const completeBudgetCurrent = selectedSavedTrip
+    ? selectedSavedTrip.complete_budget_current
+    : Boolean(generated.budget_estimate);
+  const selectedAccommodation = selectedSavedTrip?.selected_accommodation;
   const scheduledIds = new Set(
     generated.days.flatMap((day) => day.stops.map((stop) => stop.attraction_id)),
   );
@@ -583,23 +587,6 @@ function Itinerary() {
     ...new Set([...generated.warnings, ...generated.days.flatMap((day) => day.warnings)]),
   ];
   const intercityNotice = savedTrips.find((trip) => trip.id === generated.trip_id)?.origin;
-  const total = budgetEstimate?.total_estimated ?? generated.total_cost;
-  const displayBreakdown = budgetEstimate?.categories.map((item) => ({
-    name:
-      item.key === "attractions" && unknownFeeCount > 0
-        ? `${item.label} amounts (${unknownFeeCount} fee${unknownFeeCount === 1 ? "" : "s"} unknown)`
-        : item.label,
-    value: item.amount,
-    assumptions: item.assumptions,
-    source: item.source,
-  })) ?? [
-    {
-      name: "Attraction fees",
-      value: generated.total_cost,
-      assumptions: [],
-      source: generated.data_source,
-    },
-  ];
   const attributions = [
     ...new Set(
       planningAttractions
@@ -1013,79 +1000,21 @@ function Itinerary() {
             </div>
           </div>
 
-          <div className="surface space-y-3 p-5">
-            <h2 className="font-semibold">
-              {budgetEstimate ? "Estimated destination expenses" : "Attraction fees"}
-            </h2>
-            <p className="text-3xl font-semibold tracking-tight">
-              ₹{total.toLocaleString("en-IN")}
-            </p>
-            {budgetEstimate ? (
-              <div className="space-y-1 text-xs text-muted-foreground">
-                {!budgetEstimate.is_complete && (
-                  <p className="font-medium text-amber-700">
-                    Incomplete estimate: {budgetEstimate.unknown_attraction_fee_count} scheduled
-                    attraction fee(s) are unknown; the optimizer uses a zero-cost placeholder for
-                    those entries.
-                  </p>
-                )}
-                <p>
-                  Estimated per person: ₹{budgetEstimate.per_person.toLocaleString("en-IN")} · daily
-                  average: ₹{budgetEstimate.daily_average.toLocaleString("en-IN")}
-                </p>
-                <p>
-                  {budgetEstimate.within_budget
-                    ? `Listed estimates are ₹${budgetEstimate.remaining_budget.toLocaleString("en-IN")} below your budget`
-                    : `Listed estimates are ₹${Math.abs(budgetEstimate.remaining_budget).toLocaleString("en-IN")} over your budget`}
-                </p>
-                <p>
-                  Estimated destination expenses:{" "}
-                  {budgetEstimate.budget_limit > 0
-                    ? Math.round(
-                        (budgetEstimate.total_estimated / budgetEstimate.budget_limit) * 100,
-                      )
-                    : 0}
-                  % of your ₹{budgetEstimate.budget_limit.toLocaleString("en-IN")} budget. Intercity
-                  travel and unknown attraction fees are excluded.
-                </p>
-              </div>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                Attraction fees only; full trip estimate is not available for this saved plan.
+          {budgetEstimate ? (
+            <TripBudgetEstimatePanel
+              estimate={budgetEstimate}
+              completeBudgetCurrent={completeBudgetCurrent}
+              estimateIsCurrent={budgetEstimateIsCurrent}
+            />
+          ) : (
+            <div className="surface space-y-2 p-5" aria-label="Trip budget estimate">
+              <h2 className="font-semibold">Budget estimate unavailable</h2>
+              <p className="text-sm text-muted-foreground">
+                No saved cost estimate is available for this itinerary. Unknown activity fees are
+                not treated as free.
               </p>
-            )}
-            <div className="space-y-2.5 pt-2">
-              {displayBreakdown.map((b) => (
-                <div key={b.name} className="space-y-1">
-                  <div className="flex justify-between text-xs">
-                    <span className="text-muted-foreground">{b.name}</span>
-                    <span>₹{b.value.toLocaleString("en-IN")}</span>
-                  </div>
-                  <Progress value={total > 0 ? (b.value / total) * 100 : 0} className="h-1.5" />
-                  <details className="text-[11px] text-muted-foreground">
-                    <summary>{b.source} estimate and assumptions</summary>
-                    {b.assumptions.map((assumption) => (
-                      <p key={assumption} className="mt-1">
-                        {assumption}
-                      </p>
-                    ))}
-                  </details>
-                </div>
-              ))}
             </div>
-            {budgetEstimate?.exclusions.length ? (
-              <div
-                className="space-y-1 rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground"
-                role="note"
-                aria-label="Budget exclusions"
-              >
-                <p className="font-medium text-foreground">Excluded costs and estimate limits</p>
-                {budgetEstimate.exclusions.map((exclusion) => (
-                  <p key={exclusion}>{exclusion}</p>
-                ))}
-              </div>
-            ) : null}
-          </div>
+          )}
           <details className="surface p-4">
             <summary className="cursor-pointer font-semibold">
               Advanced Optimization Insights

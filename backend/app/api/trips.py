@@ -78,6 +78,36 @@ def _save_itinerary_revision(trip: Trip, itinerary: dict) -> None:
     trip.pending_itinerary_revision = None
 
 
+def _has_current_complete_budget(trip: Trip) -> bool:
+    itinerary = trip.latest_itinerary if isinstance(trip.latest_itinerary, dict) else {}
+    estimate = itinerary.get("budget_estimate") if isinstance(itinerary, dict) else None
+    return bool(
+        not trip.itinerary_stale
+        and isinstance(estimate, dict)
+        and isinstance(estimate.get("complete_budget"), dict)
+    )
+
+
+def _budget_allocation_warnings(trip: Trip, allocation: float | None = None) -> list[str]:
+    options = trip.planning_options or {}
+    warnings = []
+    for direction in ("outbound", "return"):
+        cost = options.get(f"intercity_{direction}_cost")
+        if not isinstance(cost, dict) or cost.get("status") == "unavailable" or cost.get("amount") is None:
+            warnings.append(
+                f"Intercity {direction} cost is unavailable; itinerary selection does not reserve an amount for that journey leg."
+            )
+        elif str(cost.get("currency", "INR")).upper() != "INR":
+            warnings.append(
+                f"Intercity {direction} cost is not in INR and cannot be reserved without currency conversion."
+            )
+    if float(options.get("miscellaneous_budget") or 0) <= 0:
+        warnings.append("No miscellaneous allowance was provided; no amount is reserved for those expenses.")
+    if allocation is not None and allocation <= 0:
+        warnings.append("Known reserved costs consume or exceed the full trip budget, leaving no attraction budget.")
+    return warnings
+
+
 def _build_saved_multiday_plan(trip: Trip, request: MultiDayOptimizeRequest):
     def generate(attraction_budget: float):
         return generate_multiday_greedy(
@@ -111,15 +141,20 @@ def _build_saved_multiday_plan(trip: Trip, request: MultiDayOptimizeRequest):
             trip=trip, days=result["days"], attractions=request.attractions, data_source=request.data_source,
         )
     result["budget_estimate"] = estimate
-    if not estimate["within_budget"]:
+    result["warnings"].extend(_budget_allocation_warnings(trip, allocation))
+    complete_budget = estimate.get("complete_budget") or {}
+    complete_fit = complete_budget.get("within_budget")
+    if complete_fit is False:
         result["feasible"] = False
         result["warnings"].append(
-            f"Estimated full-trip costs exceed the budget by ₹{abs(estimate['remaining_budget']):,.0f}; review the fallback assumptions or adjust trip inputs."
+            f"Estimated complete-trip costs exceed the budget by ₹{abs(complete_budget['remaining_budget']):,.0f}; review the fallback assumptions or adjust trip inputs."
+        )
+    elif complete_fit is None and not estimate["within_budget"]:
+        result["feasible"] = False
+        result["warnings"].append(
+            f"The destination-only estimate exceeds the budget by ₹{abs(estimate['remaining_budget']):,.0f}; complete-trip budget fit is unavailable because some costs are unknown."
         )
     if allocation <= 0:
-        result["warnings"].append(
-            "Estimated accommodation, meals, and miscellaneous costs use the full trip budget, leaving no attraction budget."
-        )
         result["feasible"] = False
     scheduled_ids = {stop.attraction_id for day in result["days"] for stop in day["stops"]}
     unknown_fees = [item.name for item in request.attractions if item.id in scheduled_ids and item.cost_known is False]
@@ -156,6 +191,9 @@ def list_trips(db: Session = Depends(get_db), user: User = Depends(get_current_u
             "id": trip.id,
             "name": trip.name or trip.destination,
             "origin": trip.origin,
+            "origin_latitude": trip.origin_latitude,
+            "origin_longitude": trip.origin_longitude,
+            "origin_place_id": trip.origin_place_id,
             "destination": trip.destination,
             "start_date": str(trip.start_date),
             "end_date": str(trip.end_date),
@@ -167,6 +205,7 @@ def list_trips(db: Session = Depends(get_db), user: User = Depends(get_current_u
             "created_at": trip.created_at.isoformat() if trip.created_at else None,
             "updated_at": trip.updated_at.isoformat() if trip.updated_at else None,
             "itinerary_stale": trip.itinerary_stale,
+            "complete_budget_current": _has_current_complete_budget(trip),
             "itinerary_revision": trip.itinerary_revision,
             "completed_attraction_ids": trip.completed_attraction_ids or [],
             "pending_itinerary_revision": trip.pending_itinerary_revision,
@@ -186,6 +225,9 @@ def create_trip(
         owner_user_id=user.id,
         name=(request.name or request.destination).strip(),
         origin=request.origin.strip(),
+        origin_latitude=request.origin_latitude,
+        origin_longitude=request.origin_longitude,
+        origin_place_id=request.origin_place_id,
         destination=request.destination,
         start_date=request.start_date,
         end_date=request.end_date,
@@ -205,6 +247,9 @@ def create_trip(
         "id": trip.id,
         "name": trip.name,
         "origin": trip.origin,
+        "origin_latitude": trip.origin_latitude,
+        "origin_longitude": trip.origin_longitude,
+        "origin_place_id": trip.origin_place_id,
         "destination": trip.destination,
         "start_date": str(trip.start_date),
         "end_date": str(trip.end_date),
@@ -230,6 +275,9 @@ def get_trip(
         "id": trip.id,
         "name": trip.name or trip.destination,
         "origin": trip.origin,
+        "origin_latitude": trip.origin_latitude,
+        "origin_longitude": trip.origin_longitude,
+        "origin_place_id": trip.origin_place_id,
         "destination": trip.destination,
         "start_date": str(trip.start_date),
         "end_date": str(trip.end_date),
@@ -242,6 +290,7 @@ def get_trip(
         "created_at": trip.created_at.isoformat() if trip.created_at else None,
         "updated_at": trip.updated_at.isoformat() if trip.updated_at else None,
         "itinerary_stale": trip.itinerary_stale,
+        "complete_budget_current": _has_current_complete_budget(trip),
         "itinerary_revision": trip.itinerary_revision,
         "completed_attraction_ids": trip.completed_attraction_ids or [],
         "pending_itinerary_revision": trip.pending_itinerary_revision,
@@ -304,18 +353,26 @@ def update_trip(trip_id: int, request: TripUpdate, db: Session = Depends(get_db)
     itinerary_inputs = {
         "origin", "destination", "start_date", "end_date", "budget",
         "available_minutes_per_day", "start_latitude", "start_longitude",
+        "origin_latitude", "origin_longitude", "origin_place_id",
         "preferences", "planning_options",
     }
     if "preferences" in changes and changes["preferences"] is not None:
         changes["preferences"] = request.preferences.model_dump()
     if "planning_options" in changes and changes["planning_options"] is not None:
-        changes["planning_options"] = request.planning_options.model_dump()
+        # Preserve intercity inputs when older clients omit those new fields.
+        merged_options = dict(trip.planning_options or {})
+        merged_options.update(request.planning_options.model_dump(exclude_unset=True))
+        changes["planning_options"] = merged_options
     start_date = changes.get("start_date", trip.start_date)
     end_date = changes.get("end_date", trip.end_date)
     if end_date < start_date:
         raise HTTPException(status_code=422, detail="end_date must not precede start_date")
+    origin_latitude = changes.get("origin_latitude", trip.origin_latitude)
+    origin_longitude = changes.get("origin_longitude", trip.origin_longitude)
+    if (origin_latitude is None) != (origin_longitude is None):
+        raise HTTPException(status_code=422, detail="Origin latitude and longitude must be provided together")
     for key, value in changes.items():
-        if value is not None:
+        if value is not None or key in {"origin_latitude", "origin_longitude", "origin_place_id"}:
             setattr(trip, key, value)
     if itinerary_inputs.intersection(changes):
         trip.itinerary_stale = True
@@ -326,7 +383,9 @@ def update_trip(trip_id: int, request: TripUpdate, db: Session = Depends(get_db)
     db.refresh(trip)
     return {"trip": {"id": trip.id, "name": trip.name, "destination": trip.destination,
                      "start_date": str(trip.start_date), "end_date": str(trip.end_date),
-                     "budget": trip.budget, "latest_itinerary": trip.latest_itinerary}}
+                     "budget": trip.budget, "latest_itinerary": trip.latest_itinerary,
+                     "itinerary_stale": trip.itinerary_stale,
+                     "complete_budget_current": _has_current_complete_budget(trip)}}
 
 
 @router.post("/{trip_id}/duplicate", status_code=201)
@@ -338,6 +397,9 @@ def duplicate_trip(trip_id: int, db: Session = Depends(get_db)):
         owner_user_id=source.owner_user_id,
         name=f"{source.name or source.destination} (copy)"[:150],
         origin=source.origin,
+        origin_latitude=source.origin_latitude,
+        origin_longitude=source.origin_longitude,
+        origin_place_id=source.origin_place_id,
         destination=source.destination,
         start_date=source.start_date,
         end_date=source.end_date,
@@ -479,6 +541,12 @@ def optimize_trip(
             detail=str(exc),
         ) from exc
 
+    result["warnings"] = list(dict.fromkeys([
+        *(result.get("warnings") or []), *_budget_allocation_warnings(trip, attraction_budget_after_fixed_costs(trip)),
+    ]))
+    if attraction_budget_after_fixed_costs(trip) <= 0:
+        result["feasible"] = False
+
     response = ItineraryResponse(
         trip_id=trip.id,
         algorithm="greedy",
@@ -575,6 +643,12 @@ def generate_pareto_alternatives(trip_id: int, request: ParetoRequest, db: Sessi
         )
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    allocation_warnings = _budget_allocation_warnings(trip, attraction_budget_after_fixed_costs(trip))
+    for alternative in alternatives:
+        itinerary = alternative.get("itinerary", {})
+        itinerary["warnings"] = list(dict.fromkeys([*(itinerary.get("warnings") or []), *allocation_warnings]))
+        if attraction_budget_after_fixed_costs(trip) <= 0:
+            itinerary["feasible"] = False
     response = ParetoResponse(
         trip_id=trip.id, algorithm="nsga2", seed=request.seed,
         optimization_scope="single_day",
@@ -599,6 +673,11 @@ def optimize_with_annealing(trip_id: int, request: AnnealingRequest, db: Session
         trip.start_longitude, attraction_budget_after_fixed_costs(trip), trip.available_minutes_per_day, request.seed,
         start_minute=540 if trip.available_minutes_per_day >= 540 else 0,
     )
+    result["warnings"] = list(dict.fromkeys([
+        *(result.get("warnings") or []), *_budget_allocation_warnings(trip, attraction_budget_after_fixed_costs(trip)),
+    ]))
+    if attraction_budget_after_fixed_costs(trip) <= 0:
+        result["feasible"] = False
     response = ItineraryResponse(
         trip_id=trip.id, algorithm="simulated_annealing", optimization_scope="single_day", **result
     )

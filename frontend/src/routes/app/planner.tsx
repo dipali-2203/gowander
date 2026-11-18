@@ -84,6 +84,9 @@ function Planner() {
     days: 6,
     budget: [60000],
     transport: "car",
+    intercityTransport: "",
+    outboundCost: "",
+    returnCost: "",
     hotelBudget: "mid",
     travellers: 2,
     luxury: [3],
@@ -186,6 +189,14 @@ function Planner() {
   const generateItinerary = async () => {
     try {
       const destination = form.to.trim();
+      const outboundCost = form.outboundCost.trim() ? Number(form.outboundCost) : null;
+      const returnCost = form.returnCost.trim() ? Number(form.returnCost) : null;
+      if (
+        (outboundCost !== null && (!Number.isFinite(outboundCost) || outboundCost < 0)) ||
+        (returnCost !== null && (!Number.isFinite(returnCost) || returnCost < 0))
+      ) {
+        throw new Error("Enter a valid non-negative cost for each known intercity leg.");
+      }
       const result = await createAndOptimizeTrip({
         origin: form.from.trim(),
         destination,
@@ -202,6 +213,9 @@ function Planner() {
                 : "standard",
         luxuryLevel: form.luxury[0] ?? 3,
         miscellaneousBudget: 0,
+        intercityTransportationMode: form.intercityTransport || null,
+        intercityOutboundCost: outboundCost,
+        intercityReturnCost: returnCost,
         mealPreferences: [],
         interests: form.picks,
         preferences: {
@@ -401,6 +415,67 @@ function Planner() {
                       <SelectItem value="mixed">Mixed</SelectItem>
                     </SelectContent>
                   </Select>
+                </div>
+                <div className="space-y-3 rounded-xl border border-border p-4">
+                  <div>
+                    <h3 className="text-sm font-semibold">Intercity transportation</h3>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Optional outbound and return estimates. Entered amounts are your estimates,
+                      not quoted fares; leave a leg blank if its cost is unknown.
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Intercity mode (optional)</Label>
+                    <Select
+                      value={form.intercityTransport || "unspecified"}
+                      onValueChange={(value) =>
+                        setForm({
+                          ...form,
+                          intercityTransport: value === "unspecified" ? "" : value,
+                        })
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Choose a mode" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="unspecified">Not selected</SelectItem>
+                        <SelectItem value="train">Train</SelectItem>
+                        <SelectItem value="bus">Bus</SelectItem>
+                        <SelectItem value="flight">Flight</SelectItem>
+                        <SelectItem value="car">Car</SelectItem>
+                        <SelectItem value="mixed">Mixed</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label htmlFor="intercity-outbound-cost">Outbound estimate (INR)</Label>
+                      <Input
+                        id="intercity-outbound-cost"
+                        type="number"
+                        min="0"
+                        step="1"
+                        inputMode="decimal"
+                        placeholder="Leave blank if unknown"
+                        value={form.outboundCost}
+                        onChange={(event) => setForm({ ...form, outboundCost: event.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="intercity-return-cost">Return estimate (INR)</Label>
+                      <Input
+                        id="intercity-return-cost"
+                        type="number"
+                        min="0"
+                        step="1"
+                        inputMode="decimal"
+                        placeholder="Leave blank if unknown"
+                        value={form.returnCost}
+                        onChange={(event) => setForm({ ...form, returnCost: event.target.value })}
+                      />
+                    </div>
+                  </div>
                 </div>
               </>
             )}

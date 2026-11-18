@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { ArrowLeft, Copy, Pencil, RefreshCw, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/travel/PageHeader";
+import { TripBudgetEstimatePanel } from "@/components/travel/TripBudgetEstimatePanel";
 import { Button } from "@/components/ui/button";
 import { riskAssessmentLabel, riskDetailsLabel, riskProxyLabel } from "@/lib/risk-display.js";
 import {
@@ -646,74 +647,11 @@ function TripDetailsPage() {
       )}
 
       {itinerary?.budget_estimate ? (
-        <section className="surface space-y-4 p-5">
-          <div>
-            <h2 className="font-semibold">Estimated destination expenses</h2>
-            <p className="text-xs text-muted-foreground">
-              Partial destination estimate, not the complete cost of travelling or live hotel and
-              meal quotes. Currency: INR.
-            </p>
-            {itinerary.budget_estimate.unknown_attraction_fee_count > 0 ? (
-              <p className="text-xs font-medium text-amber-700">
-                {itinerary.budget_estimate.unknown_attraction_fee_count} scheduled attraction fee(s)
-                are unknown. Their internal zero-cost placeholders do not mean entry is free.
-              </p>
-            ) : null}
-          </div>
-          <div className="grid gap-3 sm:grid-cols-4">
-            <Summary
-              label="Estimated destination expenses"
-              value={`₹${itinerary.budget_estimate.total_estimated.toLocaleString("en-IN")}`}
-            />
-            <Summary
-              label="Per person"
-              value={`₹${itinerary.budget_estimate.per_person.toLocaleString("en-IN")}`}
-            />
-            <Summary
-              label="Daily average"
-              value={`₹${itinerary.budget_estimate.daily_average.toLocaleString("en-IN")}`}
-            />
-            <Summary
-              label="Budget status"
-              value={
-                itinerary.budget_estimate.within_budget
-                  ? `Listed estimates below budget · ${Math.round((itinerary.budget_estimate.total_estimated / itinerary.budget_estimate.budget_limit) * 100)}%`
-                  : `Listed estimates above budget · ${Math.round((itinerary.budget_estimate.total_estimated / itinerary.budget_estimate.budget_limit) * 100)}%`
-              }
-            />
-          </div>
-          <div className="divide-y divide-border">
-            {itinerary.budget_estimate.categories.map((category) => (
-              <details key={category.key} className="py-3">
-                <summary className="flex cursor-pointer justify-between gap-3 text-sm">
-                  <span>
-                    {category.label} · {category.source}
-                  </span>
-                  <strong>₹{category.amount.toLocaleString("en-IN")}</strong>
-                </summary>
-                <div className="mt-2 space-y-1 text-xs text-muted-foreground">
-                  {category.assumptions.map((assumption) => (
-                    <p key={assumption}>{assumption}</p>
-                  ))}
-                  <p>
-                    Estimate range: ₹{category.range_min.toLocaleString("en-IN")}–₹
-                    {category.range_max.toLocaleString("en-IN")}
-                  </p>
-                </div>
-              </details>
-            ))}
-          </div>
-          <div
-            className="space-y-1 rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground"
-            role="note"
-            aria-label="Budget exclusions"
-          >
-            <p className="font-medium text-foreground">Excluded costs and estimate limits</p>
-            {itinerary.budget_estimate.exclusions.map((item) => (
-              <p key={item}>{item}</p>
-            ))}
-          </div>
-        </section>
+        <TripBudgetEstimatePanel
+          estimate={itinerary.budget_estimate}
+          completeBudgetCurrent={trip.complete_budget_current}
+          estimateIsCurrent={!trip.itinerary_stale}
+        />
       ) : null}
 
       <section className="grid gap-4 md:grid-cols-3">

@@ -97,6 +97,25 @@ def migrate_sqlite_schema() -> None:
             connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_google_subject ON users (google_subject)"))
 
 
+def migrate_complete_trip_budget_schema(bind=None) -> None:
+    """Add optional origin-place fields without changing existing trip records."""
+    target = bind or engine
+    inspector = inspect(target)
+    if "trips" not in inspector.get_table_names():
+        return
+    additions = {
+        "origin_latitude": "FLOAT",
+        "origin_longitude": "FLOAT",
+        "origin_place_id": "VARCHAR(200)",
+    }
+    with target.begin() as connection:
+        # Re-inspect in the transaction so repeated/concurrent startup is safe.
+        current = {column["name"] for column in inspect(connection).get_columns("trips")}
+        for name, definition in additions.items():
+            if name not in current:
+                connection.execute(text(f"ALTER TABLE trips ADD COLUMN {name} {definition}"))
+
+
 def migrate_auth_schema() -> None:
     """Add authentication columns to existing databases without replacing user data."""
     inspector = inspect(engine)

@@ -65,17 +65,71 @@ def _public_itinerary(trip: Trip) -> dict:
     estimate = itinerary.get("budget_estimate")
     budget = None
     if isinstance(estimate, dict):
+        complete = estimate.get("complete_budget")
+        public_complete = None
+        if isinstance(complete, dict):
+            public_complete = {
+                "schema_version": complete.get("schema_version"),
+                "version": complete.get("version"),
+                "currency": str(complete.get("currency") or "INR"),
+                "categories": [
+                    {
+                        "key": str(item.get("key") or "unknown"),
+                        "label": str(item.get("label") or item.get("key") or "Expense"),
+                        "amount": item.get("amount") if isinstance(item.get("amount"), (int, float)) else None,
+                        "currency": str(item.get("currency") or complete.get("currency") or "INR"),
+                        "status": str(item.get("status") or "unavailable"),
+                        "source": str(item["source"]) if item.get("source") else None,
+                        "assumptions": [str(value) for value in item.get("assumptions", []) or []],
+                        "confidence": item.get("confidence"),
+                        "range_min": item.get("range_min"),
+                        "range_max": item.get("range_max"),
+                    }
+                    for item in complete.get("categories", []) or []
+                    if isinstance(item, dict)
+                ],
+                "known_subtotal": complete.get("known_subtotal"),
+                "estimated_subtotal": complete.get("estimated_subtotal"),
+                "partial_subtotal": complete.get("partial_subtotal"),
+                "unavailable_categories": [str(value) for value in complete.get("unavailable_categories", []) or []],
+                "partial_categories": [str(value) for value in complete.get("partial_categories", []) or []],
+                "completeness": str(complete.get("completeness") or "incomplete"),
+                "total_estimate": complete.get("total_estimate"),
+                "budget_limit": complete.get("budget_limit"),
+                "remaining_budget": complete.get("remaining_budget"),
+                "within_budget": complete.get("within_budget"),
+                "assumptions": [str(value) for value in complete.get("assumptions", []) or []],
+                "exclusions": [str(value) for value in complete.get("exclusions", []) or []],
+            }
         budget = {
             "currency": "INR",
             "total_estimated": estimate.get("total_estimated"),
             "per_person": estimate.get("per_person"),
             "daily_average": estimate.get("daily_average"),
+            "budget_limit": estimate.get("budget_limit"),
+            "remaining_budget": estimate.get("remaining_budget"),
+            "within_budget": estimate.get("within_budget"),
+            "is_complete": estimate.get("is_complete", False),
+            "unknown_attraction_fee_count": estimate.get("unknown_attraction_fee_count", 0),
             "categories": [
-                {"label": item.get("label"), "amount": item.get("amount")}
+                {
+                    "key": str(item.get("key") or "unknown"),
+                    "label": item.get("label"),
+                    "amount": item.get("amount") if isinstance(item.get("amount"), (int, float)) else None,
+                    "source": str(item.get("source") or "Unavailable"),
+                    "confidence": str(item.get("confidence") or "unknown"),
+                    "range_min": item.get("range_min", 0),
+                    "range_max": item.get("range_max", 0),
+                    "assumptions": [str(value) for value in item.get("assumptions", []) or []],
+                }
                 for item in estimate.get("categories", []) or []
                 if isinstance(item, dict)
             ],
             "exclusions": [str(item) for item in estimate.get("exclusions", []) or []],
+            "last_updated": estimate.get("last_updated"),
+            "complete_budget": public_complete,
+            "complete_budget_current": bool(not trip.itinerary_stale and public_complete),
+            "estimate_is_current": not trip.itinerary_stale,
         }
 
     attributions = list(dict.fromkeys(

@@ -10,6 +10,10 @@ export type BudgetTrip = {
       total_estimated?: number | null;
       unknown_attraction_fee_count?: number;
       categories?: Array<{ key: string; amount: number | null }>;
+      complete_budget?: {
+        total_estimate: number | null;
+        categories: Array<{ key: string; amount: number | null; status?: string }>;
+      } | null;
     } | null;
     days?: Array<{
       day_number: number;
@@ -18,6 +22,8 @@ export type BudgetTrip = {
       stops?: Array<{ attraction_id: string; cost: number }>;
     }>;
   } | null;
+  complete_budget_current?: boolean;
+  itinerary_stale?: boolean;
 };
 export type BudgetTripDetail = {
   id: number;
@@ -32,11 +38,16 @@ export function buildBudgetDashboard(
   tripCount: number;
   estimatedTripCount: number;
   estimatedCost: number;
+  legacyDestinationCost: number;
+  legacyEstimateTripCount: number;
+  incompleteBudgetTripCount: number;
+  staleTripCount: number;
   allocatedBudget: number;
   allEstimatesAvailable: boolean;
   remainingBudget: number | null;
   dailyAverage: number | null;
   categoryEstimateTripCount: number;
+  categoryDataScope: "complete_trip" | "destination_only" | "unavailable";
   categories: Array<{
     key: string;
     label: string;

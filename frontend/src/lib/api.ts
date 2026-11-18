@@ -90,6 +90,8 @@ export type GeneratedItinerary = {
 };
 
 export type TripBudgetEstimate = {
+  budget_schema_version?: number;
+  complete_budget?: CompleteTripBudget | null;
   currency: "INR";
   total_estimated: number;
   per_person: number;
@@ -111,6 +113,41 @@ export type TripBudgetEstimate = {
   }>;
   exclusions: string[];
   last_updated: string | null;
+};
+
+export type BudgetCostStatus =
+  "verified" | "user_provided" | "estimated" | "partial" | "unavailable";
+
+export type CompleteBudgetCategory = {
+  key: string;
+  label: string;
+  amount: number | null;
+  currency: string;
+  status: BudgetCostStatus;
+  source: string | null;
+  assumptions: string[];
+  confidence?: string;
+  range_min?: number | null;
+  range_max?: number | null;
+};
+
+export type CompleteTripBudget = {
+  schema_version?: number;
+  version?: number;
+  currency: string;
+  categories: CompleteBudgetCategory[];
+  known_subtotal: number | null;
+  estimated_subtotal: number | null;
+  partial_subtotal: number | null;
+  unavailable_categories: string[];
+  partial_categories: string[];
+  completeness: string;
+  total_estimate: number | null;
+  budget_limit?: number | null;
+  remaining_budget?: number | null;
+  within_budget: boolean | null;
+  assumptions: string[];
+  exclusions?: string[];
 };
 
 export type ParetoAlternative = {
@@ -304,6 +341,7 @@ export type AccountTrip = {
   created_at: string | null;
   updated_at: string | null;
   itinerary_stale: boolean;
+  complete_budget_current: boolean;
   itinerary_revision: number;
   completed_attraction_ids: string[];
   pending_itinerary_revision: WeatherReplanProposal | null;
@@ -463,6 +501,17 @@ export type TripPlanningOptions = {
   luxury_level?: number;
   meal_preferences: string[];
   miscellaneous_budget: number;
+  intercity_transportation_mode?: string | null;
+  intercity_outbound_cost?: IntercityCostInput | null;
+  intercity_return_cost?: IntercityCostInput | null;
+};
+
+export type IntercityCostInput = {
+  amount: number | null;
+  currency: string;
+  status: "user_provided" | "estimated" | "unavailable";
+  source: string | null;
+  assumptions: string[];
 };
 
 export type TripDetails = AccountTrip & {
@@ -509,11 +558,20 @@ export type SharedItinerary = {
   }>;
   budget_estimate: {
     currency: "INR";
-    total_estimated: number | null;
-    per_person: number | null;
-    daily_average: number | null;
-    categories: Array<{ label: string | null; amount: number | null }>;
+    total_estimated: number;
+    per_person: number;
+    daily_average: number;
+    budget_limit: number;
+    remaining_budget: number;
+    within_budget: boolean;
+    is_complete: boolean;
+    unknown_attraction_fee_count: number;
+    categories: TripBudgetEstimate["categories"];
     exclusions: string[];
+    last_updated: string | null;
+    complete_budget?: CompleteTripBudget | null;
+    complete_budget_current?: boolean;
+    estimate_is_current?: boolean;
   } | null;
   selected_accommodation: {
     name: string;
@@ -856,6 +914,9 @@ export async function createAndOptimizeTrip(input: {
   accommodationCategory: TripPlanningOptions["accommodation_category"];
   luxuryLevel: number;
   miscellaneousBudget: number;
+  intercityTransportationMode: string | null;
+  intercityOutboundCost: number | null;
+  intercityReturnCost: number | null;
   mealPreferences: string[];
   interests: string[];
   preferences: {
@@ -918,6 +979,39 @@ export async function createAndOptimizeTrip(input: {
         luxury_level: input.luxuryLevel,
         meal_preferences: input.mealPreferences,
         miscellaneous_budget: input.miscellaneousBudget,
+        intercity_transportation_mode: input.intercityTransportationMode,
+        intercity_outbound_cost:
+          input.intercityOutboundCost === null
+            ? {
+                amount: null,
+                currency: "INR",
+                status: "unavailable",
+                source: null,
+                assumptions: [],
+              }
+            : {
+                amount: input.intercityOutboundCost,
+                currency: "INR",
+                status: "user_provided",
+                source: "User input",
+                assumptions: ["Traveler-provided estimate; not a fare quote."],
+              },
+        intercity_return_cost:
+          input.intercityReturnCost === null
+            ? {
+                amount: null,
+                currency: "INR",
+                status: "unavailable",
+                source: null,
+                assumptions: [],
+              }
+            : {
+                amount: input.intercityReturnCost,
+                currency: "INR",
+                status: "user_provided",
+                source: "User input",
+                assumptions: ["Traveler-provided estimate; not a fare quote."],
+              },
       },
     }),
   });

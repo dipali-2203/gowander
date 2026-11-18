@@ -120,6 +120,9 @@ def estimate_trip_budget(
     meal_multiplier = MEAL_MULTIPLIERS[options.accommodation_category] * (0.8 + (options.luxury_level - 1) * 0.1)
     meals = round(day_count * traveler_count * meal_base_per_person_day * meal_multiplier, 2)
     miscellaneous = round(options.miscellaneous_budget, 2)
+    # This legacy total intentionally retains destination-only semantics for old
+    # API/UI consumers. The versioned complete-budget object below is authoritative
+    # for complete-journey totals.
     total = round(attraction_cost + transportation + accommodation + meals + miscellaneous, 2)
     per_person = round(total / traveler_count, 2)
     daily_average = round(total / day_count, 2)
@@ -159,7 +162,108 @@ def estimate_trip_budget(
             "assumptions": ["Optional amount entered by the traveler."],
         },
     ]
+    legacy_categories = categories
+
+    def intercity_category(key: str, label: str, item) -> dict:
+        if item is None:
+            item = {"status": "unavailable", "amount": None, "currency": "INR"}
+        amount = _read(item, "amount")
+        currency = str(_read(item, "currency", "INR") or "INR").upper()
+        status = _read(item, "status", "unavailable")
+        source = _read(item, "source")
+        assumptions = list(_read(item, "assumptions", []) or [])
+        if currency != "INR":
+            status = "unavailable"
+            amount = None
+            assumptions.append(f"{currency} intercity costs cannot be converted to INR in this phase.")
+        if status == "unavailable" or amount is None:
+            return {
+                "key": key, "label": label, "amount": None, "currency": currency,
+                "status": "unavailable", "source": source, "assumptions": assumptions,
+            }
+        return {
+            "key": key, "label": label, "amount": round(float(amount), 2),
+            "currency": "INR", "status": status, "source": source,
+            "assumptions": assumptions,
+        }
+
+    outbound = intercity_category(
+        "intercity_outbound", "Intercity transportation · outbound", options.intercity_outbound_cost,
+    )
+    returning = intercity_category(
+        "intercity_return", "Intercity transportation · return", options.intercity_return_cost,
+    )
+    attraction_status = "partial" if unknown_attraction_fees else "estimated"
+    misc_category = (
+        {"key": "miscellaneous", "label": "Miscellaneous", "amount": miscellaneous,
+         "currency": "INR", "status": "user_provided", "source": "User input",
+         "assumptions": ["Optional traveler-entered allowance."]}
+        if options.miscellaneous_budget > 0 else
+        {"key": "miscellaneous", "label": "Miscellaneous", "amount": None,
+         "currency": "INR", "status": "unavailable", "source": None,
+         "assumptions": ["No miscellaneous allowance was provided; it is not treated as a verified zero cost."]}
+    )
+    complete_categories = [
+        outbound,
+        returning,
+        {"key": "local_transport", "label": "Local transportation", "amount": transportation,
+         "currency": "INR", "status": "estimated", "source": "configurable_distance_estimate",
+         "confidence": "low", "range_min": round(transportation * 0.75, 2),
+         "range_max": round(transportation * 1.35, 2),
+         "assumptions": [f"{route_km:.1f} straight-line km over {journey_count} local legs at INR {rate:g}/km; not a road-route fare.", fallback_assumption]},
+        {"key": "accommodation", "label": "Accommodation", "amount": accommodation,
+         "currency": "INR", "status": "estimated", "source": "selected_hotel_listing" if accommodation_confidence == "source_tag" else "configurable_allowance",
+         "confidence": accommodation_confidence,
+         "range_min": accommodation if accommodation_confidence == "source_tag" else round(accommodation * 0.75, 2),
+         "range_max": accommodation if accommodation_confidence == "source_tag" else round(accommodation * 1.4, 2),
+         "assumptions": [accommodation_assumption]},
+        {"key": "food", "label": "Food", "amount": meals, "currency": "INR",
+         "status": "estimated", "source": "configurable_allowance", "confidence": "low",
+         "range_min": round(meals * 0.7, 2), "range_max": round(meals * 1.5, 2),
+         "assumptions": [f"Three meals/day × {traveler_count} traveler(s) × {day_count} day(s); category multiplier {meal_multiplier:g}.", fallback_assumption]},
+        {"key": "attraction_fees", "label": "Attraction fees", "amount": attraction_cost,
+         "currency": "INR", "status": attraction_status, "source": data_source,
+         "assumptions": ["Summed scheduled catalog fee inputs."] + ([f"{unknown_attraction_fees} scheduled fee(s) are unknown; this is only a partial subtotal."] if unknown_attraction_fees else [])},
+        misc_category,
+    ]
+    known_subtotal = round(sum(
+        item["amount"] for item in complete_categories
+        if item["amount"] is not None and item["status"] in {"verified", "user_provided"}
+    ), 2)
+    estimated_subtotal = round(sum(
+        item["amount"] for item in complete_categories
+        if item["amount"] is not None and item["status"] == "estimated"
+    ), 2)
+    partial_subtotal = round(sum(
+        item["amount"] for item in complete_categories
+        if item["amount"] is not None and item["status"] == "partial"
+    ), 2)
+    incomplete_categories = [
+        item["key"] for item in complete_categories
+        if item["status"] in {"partial", "unavailable"}
+    ]
+    complete_total = None if incomplete_categories else round(known_subtotal + estimated_subtotal, 2)
+    completeness = "complete" if not incomplete_categories else ("partial" if known_subtotal + estimated_subtotal + partial_subtotal > 0 else "unavailable")
+    complete_budget = {
+        "schema_version": 2,
+        "currency": "INR",
+        "categories": complete_categories,
+        "known_subtotal": known_subtotal,
+        "estimated_subtotal": estimated_subtotal,
+        "partial_subtotal": partial_subtotal,
+        "unavailable_categories": [item["key"] for item in complete_categories if item["status"] == "unavailable"],
+        "partial_categories": [item["key"] for item in complete_categories if item["status"] == "partial"],
+        "completeness": completeness,
+        "total_estimate": complete_total,
+        "budget_limit": budget_limit,
+        "remaining_budget": round(budget_limit - complete_total, 2) if complete_total is not None else None,
+        "within_budget": complete_total <= budget_limit + 1e-9 if complete_total is not None else None,
+        "assumptions": [fallback_assumption, "No automatic intercity fare provider is configured; outbound and return amounts require explicit input."],
+        "exclusions": ["Unknown or partial categories are not added as zero to the complete total."],
+    }
     return {
+        "budget_schema_version": 2,
+        "complete_budget": complete_budget,
         "currency": "INR",
         "total_estimated": total,
         "per_person": per_person,
@@ -169,9 +273,9 @@ def estimate_trip_budget(
         "within_budget": total <= budget_limit + 1e-9,
         "is_complete": unknown_attraction_fees == 0,
         "unknown_attraction_fee_count": unknown_attraction_fees,
-        "categories": categories,
+        "categories": legacy_categories,
         "exclusions": [
-            "Intercity outbound and return travel are excluded because no route or fare provider is configured.",
+            "The legacy destination-only total excludes intercity outbound and return expenses; see complete_budget for the versioned journey estimate.",
             "Hotel amounts are configurable allowances, not actual booking prices or availability." if accommodation_confidence != "source_tag" else "The selected hotel's mapped nightly price is a sourced listing, not a booking quote or confirmation of availability.",
             "Meal amounts are configurable allowances; actual restaurant and menu prices are unavailable.",
             "Unknown attraction fees use an internal zero-cost optimizer placeholder; this does not mean entry is free.",
@@ -194,4 +298,7 @@ def attraction_budget_after_fixed_costs(trip: Trip) -> float:
         + day_count * options.traveler_count * meal_rate * MEAL_MULTIPLIERS[options.accommodation_category] * (0.8 + (options.luxury_level - 1) * 0.1)
         + options.miscellaneous_budget
     )
+    for cost in (options.intercity_outbound_cost, options.intercity_return_cost):
+        if cost is not None and cost.status != "unavailable" and cost.amount is not None and cost.currency == "INR":
+            fixed += float(cost.amount)
     return max(0.0, trip.budget - fixed)

@@ -19,6 +19,7 @@ from app.database import (
     engine,
     migrate_assistant_proposal_schema,
     migrate_attraction_catalog_schema,
+    migrate_complete_trip_budget_schema,
     migrate_auth_schema,
     migrate_sqlite_schema,
     migrate_user_profile_schema,
@@ -31,6 +32,7 @@ migrate_sqlite_schema()
 migrate_auth_schema()
 migrate_user_profile_schema()
 migrate_attraction_catalog_schema()
+migrate_complete_trip_budget_schema()
 
 app = FastAPI(
     title="Personalized Risk-Aware Trip Optimization API",

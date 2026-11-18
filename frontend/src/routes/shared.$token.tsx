@@ -1,5 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
+import { TripBudgetEstimatePanel } from "@/components/travel/TripBudgetEstimatePanel";
 import { getSharedItinerary, type SharedItinerary } from "@/lib/api";
 
 export const Route = createFileRoute("/shared/$token")({
@@ -121,32 +122,11 @@ function SharedItineraryPage() {
             </ol>
 
             {trip.budget_estimate ? (
-              <section className="surface space-y-3 p-5">
-                <h2 className="font-semibold">Estimated destination expenses</h2>
-                {trip.budget_estimate.categories.map((category, index) => (
-                  <p
-                    key={`${category.label}-${index}`}
-                    className="flex justify-between gap-4 text-sm"
-                  >
-                    <span>{category.label}</span>
-                    <span>
-                      {category.amount === null
-                        ? "Unavailable"
-                        : `₹${category.amount.toLocaleString("en-IN")}`}
-                    </span>
-                  </p>
-                ))}
-                {trip.budget_estimate.total_estimated !== null ? (
-                  <p className="border-t border-border pt-3 font-semibold">
-                    Total estimate: ₹{trip.budget_estimate.total_estimated.toLocaleString("en-IN")}
-                  </p>
-                ) : null}
-                {trip.budget_estimate.exclusions.map((item) => (
-                  <p key={item} className="text-xs text-muted-foreground">
-                    {item}
-                  </p>
-                ))}
-              </section>
+              <TripBudgetEstimatePanel
+                estimate={trip.budget_estimate}
+                completeBudgetCurrent={trip.budget_estimate.complete_budget_current === true}
+                estimateIsCurrent={trip.budget_estimate.estimate_is_current !== false}
+              />
             ) : null}
             {trip.selected_accommodation ? (
               <section className="surface space-y-2 p-5">

@@ -138,17 +138,60 @@ def _document_lines(trip: Any) -> list[tuple[str, str]]:
 
     estimate = itinerary.get("budget_estimate")
     if isinstance(estimate, dict):
-        lines.extend([("space", ""), ("section", "Estimated destination expenses")])
-        for category in estimate.get("categories", []) or []:
-            if isinstance(category, dict):
+        complete = estimate.get("complete_budget")
+        is_stale = bool(getattr(trip, "itinerary_stale", False))
+        complete_is_current = isinstance(complete, dict) and not is_stale
+        lines.extend([("space", ""), ("section", "Complete trip budget" if complete_is_current else "Trip budget estimate")])
+        if is_stale:
+            lines.append(("body", "This estimate is out of date because trip details changed. Regenerate the itinerary for a current estimate."))
+        elif complete_is_current and isinstance(complete, dict):
+            lines.append(("small", f"Completeness: {complete.get('completeness') or 'incomplete'}"))
+            for category in complete.get("categories", []) or []:
+                if not isinstance(category, dict):
+                    continue
                 label = category.get("label") or category.get("key") or "Expense"
-                amount = category.get("amount", category.get("estimated_amount", 0))
-                lines.append(("body", f"{label}: {_inr(amount)}"))
+                status = str(category.get("status") or "unavailable").replace("_", " ").title()
+                amount = category.get("amount") if isinstance(category.get("amount"), (int, float)) else None
+                if status == "Unavailable" or amount is None:
+                    value = "Unavailable"
+                elif status == "Partial":
+                    value = f"{_inr(amount)} known subtotal (partial)" if amount > 0 else "Partial; no known amount"
+                else:
+                    value = _inr(amount)
+                lines.append(("body", f"{label}: {value} ({status})"))
+                if category.get("source"):
+                    lines.append(("small", f"Source: {category['source']}"))
                 for assumption in category.get("assumptions", []) or []:
                     lines.append(("small", f"Assumption: {assumption}"))
-        lines.append(("body", f"Total estimated: {_inr(estimate.get('total_estimated', 0))}"))
-        for exclusion in estimate.get("exclusions", []) or []:
-            lines.append(("small", f"Excluded: {exclusion}"))
+            total = complete.get("total_estimate")
+            lines.append(("body", f"Complete trip total: {_inr(total)}"))
+            if total is None:
+                lines.append(("small", "The budget is incomplete; unknown costs are not counted as zero."))
+            elif complete.get("within_budget") is True:
+                lines.append(("body", "Budget status: Within budget estimate"))
+            elif complete.get("within_budget") is False:
+                limit = complete.get("budget_limit")
+                overrun = total - limit if isinstance(limit, (int, float)) else None
+                lines.append(("body", f"Budget status: Over budget by {_inr(max(0, overrun))}" if overrun is not None else "Budget status: Over budget"))
+            else:
+                lines.append(("body", "Budget feasibility cannot be fully determined."))
+            for assumption in complete.get("assumptions", []) or []:
+                lines.append(("small", f"Assumption: {assumption}"))
+            for exclusion in complete.get("exclusions", []) or []:
+                lines.append(("small", f"Excluded: {exclusion}"))
+        else:
+            lines.append(("small", "Legacy destination-only estimate; intercity travel is excluded."))
+            for category in estimate.get("categories", []) or []:
+                if isinstance(category, dict):
+                    label = category.get("label") or category.get("key") or "Expense"
+                    amount = category.get("amount") if isinstance(category.get("amount"), (int, float)) else None
+                    lines.append(("body", f"{label}: {_inr(amount)}"))
+                    for assumption in category.get("assumptions", []) or []:
+                        lines.append(("small", f"Assumption: {assumption}"))
+            total = estimate.get("total_estimated") if isinstance(estimate.get("total_estimated"), (int, float)) else None
+            lines.append(("body", f"Destination-only total: {_inr(total)}"))
+            for exclusion in estimate.get("exclusions", []) or []:
+                lines.append(("small", f"Excluded: {exclusion}"))
 
     source_attributions = list(dict.fromkeys(
         item.get("attribution")

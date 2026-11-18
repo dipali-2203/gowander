@@ -168,6 +168,8 @@ def test_scenario_replanning_accepts_all_four_simulated_disruptions(client: Test
     )
     assert created.status_code == 201
     trip_id = created.json()["id"]
+    assert created.json()["origin_latitude"] is None
+    assert created.json()["origin_longitude"] is None
     attractions = [
         {
             "id": "planned-museum",
@@ -311,6 +313,11 @@ def test_trip_crud_persists_inputs_and_keeps_old_plan_when_edited(client: TestCl
     assert plan.status_code == 200
     previous_plan = plan.json()
     assert previous_plan["budget_estimate"]["within_budget"] is True
+    complete_budget = previous_plan["budget_estimate"]["complete_budget"]
+    assert complete_budget["schema_version"] == 2
+    assert complete_budget["total_estimate"] is None
+    assert {"intercity_outbound", "intercity_return"} <= set(complete_budget["unavailable_categories"])
+    assert any("Intercity outbound cost is unavailable" in warning for warning in previous_plan["warnings"])
     assert {item["key"] for item in previous_plan["budget_estimate"]["categories"]} == {
         "attractions", "transportation", "accommodation", "meals", "miscellaneous",
     }
@@ -336,7 +343,13 @@ def test_trip_crud_persists_inputs_and_keeps_old_plan_when_edited(client: TestCl
     updated = client.put(
         f"/api/v1/trips/{trip_id}",
         headers={"Origin": ORIGIN},
-        json={"budget": 45000, "name": "Updated weekend"},
+        json={
+            "budget": 45000,
+            "name": "Updated weekend",
+            "origin_latitude": 28.6139,
+            "origin_longitude": 77.2090,
+            "planning_options": {"transportation_mode": "car", "intercity_transportation_mode": "bus"},
+        },
     )
     assert updated.status_code == 200
     detail = client.get(f"/api/v1/trips/{trip_id}").json()
@@ -344,12 +357,17 @@ def test_trip_crud_persists_inputs_and_keeps_old_plan_when_edited(client: TestCl
     assert detail["name"] == "Updated weekend"
     assert detail["latest_itinerary"] == previous_plan
     assert detail["itinerary_stale"] is True
+    assert detail["complete_budget_current"] is False
     assert detail["planning_inputs"]["attractions"][0]["id"] == "museum"
     assert detail["planning_options"]["traveler_count"] == 2
     assert detail["origin"] == "Delhi"
+    assert detail["origin_latitude"] == pytest.approx(28.6139)
+    assert detail["origin_longitude"] == pytest.approx(77.2090)
     assert detail["preferences"]["interests"] == {"heritage": 1.0, "spiritual": 1.0, "adventure": 1.0}
     assert detail["preferences"]["walking_tolerance"] == 0.8
     assert detail["planning_options"]["luxury_level"] == 3
+    assert detail["planning_options"]["transportation_mode"] == "car"
+    assert detail["planning_options"]["intercity_transportation_mode"] == "bus"
     assert "pareto" in detail["optimization_results"]
     assert "simulated_annealing" in detail["optimization_results"]
 
@@ -508,8 +526,25 @@ def test_authenticated_pdf_export_uses_latest_persisted_one_and_multi_day_plans(
     trip.latest_itinerary = {
         "budget_estimate": {
             "total_estimated": 12500, "per_person": 4167, "daily_average": 6250,
+            "budget_limit": 50000, "remaining_budget": 37500, "within_budget": True,
+            "is_complete": True, "unknown_attraction_fee_count": 0, "last_updated": None,
             "categories": [{"label": "Accommodation", "amount": 8000, "assumptions": ["Standard stay"]}],
             "exclusions": ["Intercity travel is excluded."],
+            "complete_budget": {
+                "schema_version": 2, "currency": "INR",
+                "categories": [{
+                    "key": "intercity_outbound", "label": "Outbound intercity travel",
+                    "amount": 1200, "currency": "INR", "status": "user_provided",
+                    "source": "User input", "assumptions": ["Traveler estimate"],
+                    "private_internal_id": "must-not-leak",
+                }],
+                "known_subtotal": 1200, "estimated_subtotal": 0, "partial_subtotal": 0,
+                "unavailable_categories": [], "partial_categories": [],
+                "completeness": "complete", "total_estimate": 1200,
+                "budget_limit": 50000, "remaining_budget": 48800, "within_budget": True,
+                "assumptions": ["Public assumption"], "exclusions": [],
+                "private_metadata": "must-not-leak",
+            },
         },
         "days": [{
             "day_number": 1, "date": "2026-12-01", "total_travel_minutes": 35,
@@ -540,6 +575,11 @@ def test_authenticated_pdf_export_uses_latest_persisted_one_and_multi_day_plans(
     assert "Lake Side Stay" in document_text
     assert "private-hotel-id" not in document_text
     assert "Nightly price unavailable" in document_text
+    assert "Complete trip budget" in document_text
+    assert "Outbound intercity travel" in document_text
+    assert "User Provided" in document_text
+    assert "Complete trip total" in document_text and "1,200" in document_text
+    assert "must-not-leak" not in document_text
     assert "₹12,500" == _inr(12500)
     db.commit()
     db.close()
@@ -588,7 +628,23 @@ def test_share_links_are_private_to_owners_reusable_revocable_and_read_only(clie
     trip_id = created.json()["id"]
     db = next(app.dependency_overrides[get_db]())
     trip = db.get(Trip, trip_id)
-    trip.latest_itinerary = {"days": [{
+    trip.latest_itinerary = {"budget_estimate": {
+        "total_estimated": 1000, "per_person": 500, "daily_average": 1000,
+        "budget_limit": 50000, "remaining_budget": 49000, "within_budget": True,
+        "is_complete": True, "unknown_attraction_fee_count": 0, "last_updated": None,
+        "categories": [], "exclusions": [],
+        "complete_budget": {
+            "schema_version": 2, "currency": "INR",
+            "categories": [{"key": "food", "label": "Food", "amount": None,
+                            "currency": "INR", "status": "unavailable", "source": None,
+                            "assumptions": []}],
+            "known_subtotal": 0, "estimated_subtotal": 0, "partial_subtotal": None,
+            "unavailable_categories": ["food"], "partial_categories": [],
+            "completeness": "incomplete", "total_estimate": None,
+            "budget_limit": 50000, "remaining_budget": None, "within_budget": None,
+            "assumptions": [], "exclusions": [],
+        },
+    }, "days": [{
         "day_number": 1, "date": "2026-12-01", "total_travel_minutes": 10,
         "meal_breaks": [], "stops": [{
             "attraction_id": "must-not-leak", "name": "City Palace", "arrival_minute": 600,
@@ -620,6 +676,13 @@ def test_share_links_are_private_to_owners_reusable_revocable_and_read_only(clie
     public_body = public.json()
     assert public_body["title"] == "Private preferences stay private"
     assert public_body["days"][0]["stops"][0]["name"] == "City Palace"
+    public_budget = public_body["budget_estimate"]
+    assert public_budget["complete_budget_current"] is True
+    assert public_budget["complete_budget"]["total_estimate"] is None
+    assert public_budget["complete_budget"]["categories"][0]["amount"] is None
+    assert public_budget["complete_budget"]["categories"][0]["status"] == "unavailable"
+    assert "private_metadata" not in public_budget["complete_budget"]
+    assert "private_internal_id" not in public_budget["complete_budget"]["categories"][0]
     assert "preferences" not in public_body
     assert "trip_id" not in public_body
     assert "traveler_email" not in public_body

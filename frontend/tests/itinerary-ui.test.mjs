@@ -33,15 +33,14 @@ test("advanced itinerary tools are grouped in a native collapsed-by-default disc
   assert.ok(savedTripSource.includes("stop.wait_reason"));
 });
 
-test("traveler budget copy identifies destination scope and unknown fees", () => {
-  assert.ok(source.includes("Estimated destination expenses"));
-  assert.ok(source.includes("travel and unknown attraction fees are excluded."));
-  assert.ok(source.includes("zero-cost placeholder"));
-  assert.ok(source.includes("budgetEstimate.exclusions.map"));
+test("itinerary uses the shared budget panel and never treats unknown fees as free", () => {
+  assert.ok(source.includes("TripBudgetEstimatePanel"));
+  assert.ok(source.includes("Budget estimate unavailable"));
+  assert.ok(source.includes("Unknown activity fees are"));
   assert.ok(source.includes("riskDetailsLabel("));
-  assert.ok(savedTripSource.includes("Estimated destination expenses"));
-  assert.ok(savedTripSource.includes("internal zero-cost placeholders do not mean entry is free"));
-  assert.ok(savedTripSource.includes("itinerary.budget_estimate.exclusions.map"));
+  assert.ok(savedTripSource.includes("TripBudgetEstimatePanel"));
+  assert.ok(savedTripSource.includes("completeBudgetCurrent={trip.complete_budget_current}"));
+  assert.ok(savedTripSource.includes("estimateIsCurrent={!trip.itinerary_stale}"));
 });
 
 test("single-day optimizer results are explicitly distinguished from the multi-day plan", () => {

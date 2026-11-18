@@ -57,6 +57,30 @@ class ProfileUpdate(BaseModel):
         return self
 
 
+class IntercityCostInput(BaseModel):
+    """Explicit intercity amount; this application has no automatic fare source yet."""
+
+    model_config = {"extra": "forbid"}
+
+    amount: float | None = Field(default=None, ge=0, le=5_000_000)
+    currency: str = Field(default="INR", pattern=r"^[A-Z]{3}$")
+    status: Literal["user_provided", "estimated", "unavailable"] = "unavailable"
+    source: str | None = Field(default=None, max_length=120)
+    assumptions: list[str] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def validate_cost(self):
+        if self.status == "unavailable" and self.amount is not None:
+            raise ValueError("Unavailable intercity costs must not include an amount.")
+        if self.status != "unavailable" and self.amount is None:
+            raise ValueError("Available intercity costs require an amount.")
+        if self.status == "user_provided" and not self.source:
+            self.source = "User input"
+        if self.status == "estimated" and not self.source:
+            raise ValueError("Estimated intercity costs require a source.")
+        return self
+
+
 class TripPlanningOptions(BaseModel):
     model_config = {"extra": "forbid"}
 
@@ -66,11 +90,17 @@ class TripPlanningOptions(BaseModel):
     luxury_level: int = Field(default=3, ge=1, le=5)
     meal_preferences: list[str] = Field(default_factory=list, max_length=12)
     miscellaneous_budget: float = Field(default=0, ge=0, le=5_000_000)
+    intercity_transportation_mode: str | None = Field(default=None, max_length=40)
+    intercity_outbound_cost: IntercityCostInput | None = None
+    intercity_return_cost: IntercityCostInput | None = None
 
 
 class TripCreate(BaseModel):
     name: str | None = Field(default=None, max_length=150)
     origin: str = Field(default="", max_length=100)
+    origin_latitude: float | None = Field(default=None, ge=-90, le=90)
+    origin_longitude: float | None = Field(default=None, ge=-180, le=180)
+    origin_place_id: str | None = Field(default=None, max_length=200)
     destination: str = Field(min_length=2, max_length=100)
     start_date: date
     end_date: date
@@ -86,6 +116,8 @@ class TripCreate(BaseModel):
     def validate_dates(self):
         if self.end_date < self.start_date:
             raise ValueError("end_date must not precede start_date")
+        if (self.origin_latitude is None) != (self.origin_longitude is None):
+            raise ValueError("Origin latitude and longitude must be provided together.")
         return self
 
 
@@ -94,6 +126,9 @@ class TripUpdate(BaseModel):
 
     name: str | None = Field(default=None, min_length=1, max_length=150)
     origin: str | None = Field(default=None, max_length=100)
+    origin_latitude: float | None = Field(default=None, ge=-90, le=90)
+    origin_longitude: float | None = Field(default=None, ge=-180, le=180)
+    origin_place_id: str | None = Field(default=None, max_length=200)
     destination: str | None = Field(default=None, min_length=2, max_length=100)
     start_date: date | None = None
     end_date: date | None = None

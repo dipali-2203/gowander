@@ -3,7 +3,7 @@ from datetime import date
 import pytest
 
 from app.models import Hotel, Trip, TripAccommodation
-from app.schemas import AttractionInput, ItineraryStop
+from app.schemas import AttractionInput, ItineraryStop, MultiDayOptimizeRequest, TripCreate
 from app.services.budget import attraction_budget_after_fixed_costs, estimate_trip_budget
 
 
@@ -64,7 +64,7 @@ def test_fallback_budget_uses_explicit_config_and_reports_categories(monkeypatch
     assert estimate["total_estimated"] == sum(amounts.values())
     assert estimate["per_person"] == pytest.approx(estimate["total_estimated"] / 2, abs=0.01)
     assert estimate["within_budget"] is True
-    assert any("Intercity outbound and return" in item for item in estimate["exclusions"])
+    assert any("legacy destination-only total" in item for item in estimate["exclusions"])
 
 
 def test_fixed_estimates_are_reserved_before_attraction_budget(monkeypatch):
@@ -153,3 +153,157 @@ def test_selected_hotel_without_price_keeps_existing_allowance(monkeypatch):
     accommodation = next(item for item in estimate["categories"] if item["key"] == "accommodation")
     assert accommodation["amount"] == 2000
     assert "no supported INR nightly rate" in " ".join(accommodation["assumptions"])
+
+
+def test_complete_budget_includes_independent_user_provided_intercity_legs():
+    trip = make_trip(planning_options={
+        **make_trip().planning_options,
+        "intercity_transportation_mode": "train",
+        "intercity_outbound_cost": {"amount": 1500, "currency": "INR", "status": "user_provided"},
+        "intercity_return_cost": {"amount": 900, "currency": "INR", "status": "user_provided"},
+    })
+    estimate = estimate_trip_budget(trip=trip, days=[], attractions=[], data_source="osm")
+    complete = estimate["complete_budget"]
+    categories = {item["key"]: item for item in complete["categories"]}
+
+    assert complete["schema_version"] == 2
+    assert categories["intercity_outbound"]["amount"] == 1500
+    assert categories["intercity_return"]["amount"] == 900
+    assert categories["intercity_outbound"]["status"] == "user_provided"
+    assert complete["total_estimate"] == sum(item["amount"] for item in complete["categories"])
+    assert complete["completeness"] == "complete"
+    # The legacy destination estimate remains compatible and excludes intercity.
+    assert estimate["total_estimated"] == sum(item["amount"] for item in estimate["categories"])
+
+
+def test_estimated_intercity_cost_is_retained_and_reserved():
+    trip = make_trip(planning_options={
+        **make_trip().planning_options,
+        "intercity_outbound_cost": {
+            "amount": 1200, "currency": "INR", "status": "estimated",
+            "source": "Traveler-supplied estimate", "assumptions": ["Not a fare quote."],
+        },
+    })
+    estimate = estimate_trip_budget(trip=trip, days=[], attractions=[], data_source="osm")
+    outbound = next(item for item in estimate["complete_budget"]["categories"] if item["key"] == "intercity_outbound")
+
+    assert outbound["amount"] == 1200
+    assert outbound["status"] == "estimated"
+    assert outbound["source"] == "Traveler-supplied estimate"
+    assert attraction_budget_after_fixed_costs(trip) == 20000 - 11700 - 1200
+
+
+def test_unavailable_intercity_costs_are_null_and_excluded_from_complete_total():
+    estimate = estimate_trip_budget(trip=make_trip(), days=[], attractions=[], data_source="osm")
+    complete = estimate["complete_budget"]
+    categories = {item["key"]: item for item in complete["categories"]}
+
+    assert categories["intercity_outbound"]["amount"] is None
+    assert categories["intercity_return"]["amount"] is None
+    assert set(complete["unavailable_categories"]) == {"intercity_outbound", "intercity_return"}
+    assert complete["total_estimate"] is None
+    assert complete["remaining_budget"] is None
+
+
+def test_non_inr_intercity_input_is_preserved_but_not_added_without_conversion():
+    trip = make_trip(planning_options={
+        **make_trip().planning_options,
+        "intercity_outbound_cost": {"amount": 100, "currency": "USD", "status": "user_provided"},
+    })
+    estimate = estimate_trip_budget(trip=trip, days=[], attractions=[], data_source="osm")
+    outbound = next(item for item in estimate["complete_budget"]["categories"] if item["key"] == "intercity_outbound")
+
+    assert outbound["amount"] is None
+    assert outbound["currency"] == "USD"
+    assert outbound["status"] == "unavailable"
+    assert "cannot be converted" in " ".join(outbound["assumptions"])
+
+
+def test_unknown_attraction_fee_is_partial_in_complete_budget():
+    trip = make_trip()
+    attraction = AttractionInput(
+        id="unknown", name="Unknown fee", category="history", latitude=26.92, longitude=75.82,
+        cost=0, visit_minutes=60, preference_score=0.8, cost_known=False,
+    )
+    estimate = estimate_trip_budget(
+        trip=trip, attractions=[attraction], data_source="osm",
+        days=[{"total_cost": 0, "stops": [{"attraction_id": "unknown"}]}],
+    )
+    fees = next(item for item in estimate["complete_budget"]["categories"] if item["key"] == "attraction_fees")
+
+    assert fees["status"] == "partial"
+    assert fees["amount"] == 0
+    assert "attraction_fees" in estimate["complete_budget"]["partial_categories"]
+    assert estimate["complete_budget"]["total_estimate"] is None
+
+
+def test_complete_budget_allocation_clamps_when_reserved_costs_exceed_budget():
+    trip = make_trip(
+        budget=1000,
+        planning_options={
+            **make_trip().planning_options,
+            "intercity_outbound_cost": {"amount": 2000, "currency": "INR", "status": "user_provided"},
+        },
+    )
+    assert attraction_budget_after_fixed_costs(trip) == 0
+
+
+def test_trip_create_allows_legacy_missing_origin_location_and_validates_coordinate_pair():
+    values = {
+        "origin": "Delhi", "destination": "Jaipur", "start_date": "2026-12-01",
+        "end_date": "2026-12-02", "budget": 20000, "start_latitude": 26.9,
+        "start_longitude": 75.8,
+    }
+    assert TripCreate(**values).origin_latitude is None
+    with pytest.raises(ValueError, match="provided together"):
+        TripCreate(**{**values, "origin_latitude": 28.6})
+
+
+def test_saved_plan_uses_complete_budget_status_when_intercity_causes_overrun(monkeypatch):
+    from app.api import trips as trips_api
+
+    trip = make_trip(
+        budget=15000,
+        planning_options={
+            **make_trip().planning_options,
+            "traveler_count": 1,
+            "transportation_mode": "walking",
+            "miscellaneous_budget": 100,
+            "intercity_outbound_cost": {"amount": 2000, "currency": "INR", "status": "user_provided"},
+            "intercity_return_cost": {"amount": 2000, "currency": "INR", "status": "user_provided"},
+        },
+    )
+    seen_budgets = []
+
+    def generated_plan(**kwargs):
+        seen_budgets.append(kwargs["budget"])
+        return {
+            "days": [{"stops": [], "warnings": [], "total_cost": 2000}],
+            "total_cost": 2000,
+            "total_travel_minutes": 0,
+            "total_visit_minutes": 0,
+            "satisfaction": 0,
+            "risk_score": None,
+            "risk_data_status": "unavailable",
+            "feasible": True,
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(trips_api, "generate_multiday_greedy", generated_plan)
+    request = MultiDayOptimizeRequest(
+        attractions=[{
+            "id": "museum", "name": "Museum", "category": "museum",
+            "latitude": 26.92, "longitude": 75.82, "cost": 2000,
+            "visit_minutes": 60, "preference_score": 0.8,
+        }],
+        data_source="osm",
+    )
+    result = trips_api._build_saved_multiday_plan(trip, request)
+    estimate = result["budget_estimate"]
+
+    assert seen_budgets == [1500]
+    assert estimate["within_budget"] is True  # legacy destination-only status
+    assert estimate["complete_budget"]["total_estimate"] == 15500
+    assert estimate["complete_budget"]["within_budget"] is False
+    assert result["feasible"] is False
+    assert any("complete-trip costs exceed the budget by ₹500" in warning for warning in result["warnings"])

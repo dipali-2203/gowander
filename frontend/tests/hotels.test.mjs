@@ -46,6 +46,6 @@ test("hotel filters, view dialog, trip selection and removal use live recommenda
 test("trip selection and current estimate are shown on itinerary, saved trip and budget views", () => {
   assert.match(api, /\/api\/v1\/trips\/\$\{tripId\}\/accommodation/);
   assert.match(tripDetails, /Change or remove stay/);
-  assert.match(budget, /Current estimated trip cost/);
+  assert.match(budget, /Complete Trip Cost/);
   assert.match(budget, /selected_accommodation\.name/);
 });

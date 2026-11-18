@@ -16,6 +16,11 @@ class Trip(Base):
     owner_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(150), default="", nullable=False)
     origin: Mapped[str] = mapped_column(String(100), default="", nullable=False)
+    # Optional origin-city coordinates for intercity budgeting. The start_* fields
+    # below remain the destination-local itinerary start point.
+    origin_latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    origin_longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    origin_place_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     destination: Mapped[str] = mapped_column(String(100))
     start_date: Mapped[date] = mapped_column(Date)
     end_date: Mapped[date] = mapped_column(Date)
