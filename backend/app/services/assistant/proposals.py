@@ -109,7 +109,14 @@ def _budget_comparison(original: dict | None, proposed: dict | None) -> dict:
     }
 
 
-def create_trip_proposal(*, db, user_id: int, trip: Trip, intent: AssistantIntentOutput) -> tuple[dict | None, str]:
+def create_trip_proposal(
+    *,
+    db,
+    user_id: int,
+    trip: Trip,
+    intent: AssistantIntentOutput,
+    request_id: str | None = None,
+) -> tuple[dict | None, str]:
     if not trip.planning_inputs:
         return None, "This saved trip does not have the attraction and planning inputs needed to safely recalculate an itinerary. Generate a saved itinerary in the planner first."
     if not trip.latest_itinerary:
@@ -201,6 +208,8 @@ def create_trip_proposal(*, db, user_id: int, trip: Trip, intent: AssistantInten
         "preferences": deepcopy(trip.preferences or {}),
         "planning_inputs": deepcopy(trip.planning_inputs),
     }
+    if request_id is not None:
+        original_inputs["_assistant_request_id"] = request_id
     proposed_inputs = {
         "budget": proposed_budget,
         "preferences": proposed_preferences,

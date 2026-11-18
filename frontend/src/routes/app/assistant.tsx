@@ -39,6 +39,13 @@ type Message = {
   proposal?: AssistantTripProposal | null;
 };
 
+type RetryableMessage = {
+  message: string;
+  requestId: string;
+  tripId: number | null;
+  history: Array<{ role: "user" | "assistant"; content: string }>;
+};
+
 const prompts = [
   "Make my trip more relaxed",
   "Change my trip budget",
@@ -62,7 +69,9 @@ function Assistant() {
   const [typing, setTyping] = useState(false);
   const [proposalActionId, setProposalActionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [retryableMessage, setRetryableMessage] = useState<RetryableMessage | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const requestInFlightRef = useRef(false);
   const nextMessageId = useRef(2);
   const tripSelectionInitialized = useRef(false);
   const selectedTrip = savedTrips.find((trip) => trip.id === selectedTripId) ?? null;
@@ -106,28 +115,42 @@ function Assistant() {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, typing, error]);
 
-  const send = async (text: string) => {
-    const message = text.trim();
-    if (!message || typing) return;
-    const historyItems = messages.slice(-6);
-    while (historyItems[0]?.role === "assistant") historyItems.shift();
-    const history = historyItems.map((item) => ({
-      role: item.role,
-      content: item.text,
-    }));
-    setMessages((items) => [
-      ...items,
-      { id: nextMessageId.current++, role: "user", text: message },
-    ]);
-    setInput("");
+  const send = async (text: string, retry?: RetryableMessage) => {
+    if (requestInFlightRef.current) return;
+    const message = retry?.message ?? text.trim();
+    if (!message) return;
+    const history =
+      retry?.history ??
+      (() => {
+        const historyItems = messages.slice(-6);
+        while (historyItems[0]?.role === "assistant") historyItems.shift();
+        return historyItems.map((item) => ({ role: item.role, content: item.text }));
+      })();
+    const request = retry ?? {
+      message,
+      requestId: crypto.randomUUID(),
+      tripId: selectedTripId,
+      history,
+    };
+    requestInFlightRef.current = true;
+    setRetryableMessage(request);
+    if (!retry) {
+      setMessages((items) => [
+        ...items,
+        { id: nextMessageId.current++, role: "user", text: message },
+      ]);
+      setInput("");
+    }
     setTyping(true);
     setError(null);
     try {
       const result = await sendAssistantMessage({
         message,
-        trip_id: selectedTripId,
+        trip_id: request.tripId,
+        request_id: request.requestId,
         conversation_history: history,
       });
+      setRetryableMessage(null);
       setMessages((items) => [
         ...items,
         {
@@ -144,6 +167,7 @@ function Assistant() {
           : "The assistant could not respond. Please try again.",
       );
     } finally {
+      requestInFlightRef.current = false;
       setTyping(false);
     }
   };
@@ -236,7 +260,7 @@ function Assistant() {
           id="assistant-trip"
           className="h-10 min-w-56 rounded-md border border-input bg-background px-3 text-sm"
           value={selectedTripId ?? ""}
-          disabled={typing || !savedTripsLoaded}
+          disabled={typing || retryableMessage !== null || !savedTripsLoaded}
           onChange={(event) => changeTripContext(event.target.value)}
         >
           <option value="">General travel chat</option>
@@ -327,7 +351,19 @@ function Assistant() {
                   role="alert"
                   className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
                 >
-                  {error} Your message is still here; you can try again.
+                  <p>{error} Your message is preserved.</p>
+                  {retryableMessage && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="mt-2"
+                      disabled={typing}
+                      onClick={() => void send(retryableMessage.message, retryableMessage)}
+                    >
+                      Retry message
+                    </Button>
+                  )}
                 </li>
               )}
             </ul>
@@ -341,7 +377,7 @@ function Assistant() {
                   <button
                     type="button"
                     onClick={() => void send(prompt)}
-                    disabled={typing}
+                    disabled={typing || retryableMessage !== null}
                     className="rounded-full border border-border px-3 py-1.5 text-xs transition-colors hover:bg-muted disabled:opacity-50"
                   >
                     {prompt}
@@ -359,6 +395,7 @@ function Assistant() {
               <Input
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
+                disabled={typing || retryableMessage !== null}
                 placeholder="Ask anything about travel…"
                 aria-label="Message the AI assistant"
                 maxLength={2_000}
@@ -367,7 +404,7 @@ function Assistant() {
                 type="submit"
                 size="icon"
                 aria-label="Send message"
-                disabled={typing || !input.trim()}
+                disabled={typing || retryableMessage !== null || !input.trim()}
               >
                 <Send className="h-4 w-4" />
               </Button>

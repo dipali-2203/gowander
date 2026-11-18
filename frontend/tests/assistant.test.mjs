@@ -7,7 +7,7 @@ const api = readFileSync(new URL("../src/lib/api.ts", import.meta.url), "utf8");
 
 test("assistant sends current-session history and selected trip context to backend", () => {
   assert.match(ui, /sendAssistantMessage\(\{/);
-  assert.match(ui, /trip_id:\s*selectedTripId/);
+  assert.match(ui, /trip_id:\s*request\.tripId/);
   assert.match(ui, /conversation_history:\s*history/);
   assert.match(api, /\/api\/v1\/assistant\/chat/);
 });
@@ -19,6 +19,15 @@ test("assistant exposes loading and recoverable error states without mock replie
   assert.match(ui, /try again/);
   assert.doesNotMatch(ui, /setTimeout\(/);
   assert.doesNotMatch(ui, /const replies:/);
+});
+
+test("assistant retries the preserved message with the same request ID and blocks duplicates while pending", () => {
+  assert.match(ui, /requestInFlightRef\.current\) return/);
+  assert.match(ui, /Retry message/);
+  assert.match(ui, /send\(retryableMessage\.message, retryableMessage\)/);
+  assert.match(ui, /request_id:\s*request\.requestId/);
+  assert.match(ui, /retryableMessage !== null/);
+  assert.match(api, /request_id: string/);
 });
 
 test("assistant keeps provider credentials private and only applies explicit proposal actions", () => {

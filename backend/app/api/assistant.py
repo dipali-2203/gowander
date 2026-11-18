@@ -44,6 +44,24 @@ async def chat(
         )
         if trip is None:
             raise HTTPException(status_code=404, detail="Trip not found.")
+    if trip is not None and payload.request_id is not None:
+        existing_proposal = db.scalar(
+            select(AssistantTripProposal)
+            .where(
+                AssistantTripProposal.user_id == user.id,
+                AssistantTripProposal.trip_id == trip.id,
+                AssistantTripProposal.original_inputs["_assistant_request_id"].as_string()
+                == str(payload.request_id),
+            )
+            .limit(1)
+        )
+        if existing_proposal is not None:
+            return AssistantChatResponse(
+                response="This request already created a proposal. I returned the existing proposal without creating another.",
+                conversation_id=None,
+                suggested_actions=[],
+                proposal=proposal_to_dict(existing_proposal),
+            )
     try:
         response, proposal = await assistant_service.process_assistant_message(
             db=db,
@@ -51,6 +69,7 @@ async def chat(
             message=payload.message,
             conversation_history=payload.conversation_history,
             trip=trip,
+            request_id=str(payload.request_id) if payload.request_id is not None else None,
         )
     except AssistantNotConfigured as exc:
         raise HTTPException(

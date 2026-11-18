@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 
@@ -233,6 +234,7 @@ def _fake_sdk(monkeypatch, response_text="Mock Gemini reply", error=None):
 
         async def generate_content(self, **kwargs):
             self.calls += 1
+            captured["request_calls"] = self.calls
             captured.update(kwargs)
             if error == "timeout":
                 raise asyncio.TimeoutError
@@ -368,8 +370,12 @@ def test_gemini_provider_handles_rate_limit_and_provider_failure(monkeypatch):
     _fake_sdk(monkeypatch, error=429)
     with pytest.raises(AssistantRateLimited):
         asyncio.run(generate_gemini_reply(system_instruction="", history=[], message="Hi"))
-    _fake_sdk(monkeypatch, error=503)
+    captured = _fake_sdk(monkeypatch, error=503)
     with pytest.raises(AssistantUnavailable):
+        asyncio.run(generate_gemini_reply(system_instruction="", history=[], message="Hi"))
+    assert captured["request_calls"] == 1
+    _fake_sdk(monkeypatch, error=504)
+    with pytest.raises(AssistantTimedOut):
         asyncio.run(generate_gemini_reply(system_instruction="", history=[], message="Hi"))
     _fake_sdk(monkeypatch, error="timeout")
     with pytest.raises(AssistantTimedOut):
@@ -381,7 +387,7 @@ def test_gemini_provider_retries_transient_failure_once(monkeypatch):
     captured = {}
 
     class FakeAPIError(Exception):
-        code = 503
+        code = 502
 
     class FakeModels:
         calls = 0
@@ -422,6 +428,57 @@ def test_gemini_provider_retries_transient_failure_once(monkeypatch):
     monkeypatch.setattr(gemini_provider, "RETRY_BACKOFF_SECONDS", 0)
     assert asyncio.run(generate_gemini_reply(system_instruction="", history=[], message="Hi")) == "Recovered reply"
     assert models.calls == 2
+
+
+def test_gemini_provider_enforces_total_request_deadline_across_retry(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(gemini_provider, "REQUEST_TIMEOUT_SECONDS", 0.08)
+    monkeypatch.setattr(gemini_provider, "TOTAL_REQUEST_TIMEOUT_SECONDS", 0.12)
+    monkeypatch.setattr(gemini_provider, "RETRY_BACKOFF_SECONDS", 0.01)
+
+    class FakeAPIError(Exception):
+        code = 502
+
+    class SlowModels:
+        calls = 0
+
+        async def generate_content(self, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise FakeAPIError("temporary provider response")
+            await asyncio.sleep(1)
+
+    models = SlowModels()
+
+    class FakeAsyncClient:
+        def __init__(self):
+            self.models = models
+
+        async def aclose(self):
+            return None
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            self.aio = FakeAsyncClient()
+
+        def close(self):
+            return None
+
+    fake_types = SimpleNamespace(
+        HttpOptions=lambda **kwargs: SimpleNamespace(**kwargs),
+        HttpRetryOptions=lambda **kwargs: SimpleNamespace(**kwargs),
+        GenerateContentConfig=lambda **kwargs: SimpleNamespace(**kwargs),
+    )
+    monkeypatch.setattr(
+        gemini_provider,
+        "_load_sdk",
+        lambda: (SimpleNamespace(Client=FakeClient), SimpleNamespace(APIError=FakeAPIError), fake_types),
+    )
+    started = time.monotonic()
+    with pytest.raises(AssistantTimedOut):
+        asyncio.run(generate_gemini_reply(system_instruction="", history=[], message="Hi"))
+    assert models.calls == 2
+    assert time.monotonic() - started < 0.35
 
 
 def test_gemini_provider_does_not_retry_local_schema_errors(monkeypatch, caplog):
@@ -581,6 +638,32 @@ def test_budget_proposal_and_rejection_leave_trip_unchanged(client, monkeypatch)
     assert saved["latest_itinerary"] == before["latest_itinerary"]
     assert saved["itinerary_revision"] == before["itinerary_revision"]
     assert rejected.json()["proposal"]["status"] == "rejected"
+
+
+def test_repeated_chat_request_id_returns_existing_proposal(client, monkeypatch):
+    trip_id = create_plannable_trip(client, "idempotent-proposal@example.com")
+    calls = 0
+
+    async def fake_generate(**kwargs):
+        nonlocal calls
+        calls += 1
+        assert kwargs["response_json_schema"]
+        return json.dumps(pace_intent())
+
+    monkeypatch.setattr(assistant_service, "generate_gemini_reply", fake_generate)
+    request = {
+        "trip_id": trip_id,
+        "request_id": "2d02d51e-556a-458c-89b9-bf1883f05486",
+        "message": "Make my trip more relaxed.",
+        "conversation_history": [],
+    }
+    first = client.post("/api/v1/assistant/chat", headers={"Origin": ORIGIN}, json=request)
+    second = client.post("/api/v1/assistant/chat", headers={"Origin": ORIGIN}, json=request)
+    assert first.status_code == second.status_code == 200
+    assert first.json()["proposal"]["proposal_id"] == second.json()["proposal"]["proposal_id"]
+    assert second.json()["proposal"]["status"] == "pending"
+    assert "existing proposal" in second.json()["response"]
+    assert calls == 1
 
 
 def test_unsupported_duration_does_not_create_proposal(client, monkeypatch):

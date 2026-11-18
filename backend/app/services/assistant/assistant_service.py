@@ -132,6 +132,7 @@ async def process_assistant_message(
     message: str,
     conversation_history: list[AssistantMessage],
     trip: Trip | None,
+    request_id: str | None = None,
 ) -> tuple[str, dict[str, Any] | None]:
     """Extract one validated intent, then optionally execute a deterministic proposal plan."""
     trip_context = build_trip_context(trip) if trip is not None else None
@@ -168,5 +169,11 @@ async def process_assistant_message(
             None,
         )
 
-    proposal, response = create_trip_proposal(db=db, user_id=user_id, trip=trip, intent=intent)
+    proposal, response = create_trip_proposal(
+        db=db,
+        user_id=user_id,
+        trip=trip,
+        intent=intent,
+        request_id=request_id,
+    )
     return response, proposal

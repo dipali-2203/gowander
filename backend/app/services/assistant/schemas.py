@@ -1,4 +1,5 @@
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -23,6 +24,7 @@ class AssistantChatRequest(BaseModel):
 
     message: str = Field(min_length=1, max_length=2_000)
     trip_id: int | None = Field(default=None, gt=0)
+    request_id: UUID | None = None
     conversation_history: list[AssistantMessage] = Field(default_factory=list, max_length=16)
 
     @field_validator("message")

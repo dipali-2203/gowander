@@ -11,9 +11,11 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-REQUEST_TIMEOUT_SECONDS = 45
+REQUEST_TIMEOUT_SECONDS = 18
+TOTAL_REQUEST_TIMEOUT_SECONDS = 25
+CLIENT_CLEANUP_TIMEOUT_SECONDS = 1
 MAX_ATTEMPTS = 2
-RETRY_BACKOFF_SECONDS = 0.5
+RETRY_BACKOFF_SECONDS = 0.25
 RETRYABLE_TRANSPORT_EXCEPTIONS = {
     "ConnectError",
     "ConnectTimeout",
@@ -127,6 +129,7 @@ async def generate_gemini_reply(
     client = None
     async_client = None
     started = time.monotonic()
+    deadline = started + TOTAL_REQUEST_TIMEOUT_SECONDS
     retry_attempted = False
     request_text = [system_instruction, message, *(content for _role, content in history)]
     generation_config: dict[str, Any] = {
@@ -156,6 +159,16 @@ async def generate_gemini_reply(
     try:
         for attempt in range(MAX_ATTEMPTS):
             request_attempt = "initial" if attempt == 0 else "retry"
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.warning(
+                    "Gemini assistant provider=%s model=%s category=timeout stage=request_execution "
+                    "exception_class=TotalRequestDeadline exception_message=deadline_exhausted "
+                    "duration_ms=%s request_attempt=%s status_code=none retry_attempted=%s",
+                    "gemini", model, round((time.monotonic() - started) * 1_000),
+                    request_attempt, retry_attempted,
+                )
+                raise AssistantTimedOut
             try:
                 response = await asyncio.wait_for(
                     async_client.models.generate_content(
@@ -163,7 +176,7 @@ async def generate_gemini_reply(
                         contents=contents,
                         config=types.GenerateContentConfig(**generation_config),
                     ),
-                    timeout=REQUEST_TIMEOUT_SECONDS + 1,
+                    timeout=min(REQUEST_TIMEOUT_SECONDS, remaining),
                 )
                 logger.info(
                     "Gemini assistant provider=%s model=%s category=success stage=request_execution "
@@ -207,7 +220,12 @@ async def generate_gemini_reply(
                         "gemini", model, duration_ms, code, retry_attempted,
                     )
                     raise AssistantNotConfigured from exc
-                if code in {500, 502, 503, 504} and attempt + 1 < MAX_ATTEMPTS:
+                if code == 504:
+                    raise AssistantTimedOut from exc
+                if code in {500, 502} and attempt + 1 < MAX_ATTEMPTS:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= RETRY_BACKOFF_SECONDS:
+                        raise AssistantTimedOut from exc
                     retry_attempted = True
                     await asyncio.sleep(RETRY_BACKOFF_SECONDS * (2**attempt))
                     continue
@@ -233,7 +251,8 @@ async def generate_gemini_reply(
                     )
                     raise AssistantTimedOut from exc
                 retryable_transport = _is_retryable_transport_error(exc)
-                if retryable_transport and attempt + 1 < MAX_ATTEMPTS:
+                remaining = deadline - time.monotonic()
+                if retryable_transport and attempt + 1 < MAX_ATTEMPTS and remaining > RETRY_BACKOFF_SECONDS:
                     logger.warning(
                         "Gemini assistant provider=%s model=%s category=transport_retry stage=request_execution "
                         "exception_class=%s exception_message=%r duration_ms=%s request_attempt=%s "
@@ -259,7 +278,11 @@ async def generate_gemini_reply(
     finally:
         if async_client is not None:
             try:
-                await async_client.aclose()
+                await asyncio.wait_for(
+                    async_client.aclose(), timeout=CLIENT_CLEANUP_TIMEOUT_SECONDS
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Gemini assistant client cleanup timed out")
             except Exception:
                 logger.warning("Gemini assistant client cleanup failed")
         elif client is not None:

@@ -645,6 +645,7 @@ export async function getTrip(tripId: number) {
 export function sendAssistantMessage(input: {
   message: string;
   trip_id: number | null;
+  request_id: string;
   conversation_history: AssistantChatMessage[];
 }) {
   return request<AssistantChatResponse>("/api/v1/assistant/chat", {
