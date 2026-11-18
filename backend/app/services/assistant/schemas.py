@@ -85,7 +85,7 @@ class AssistantIntentOutput(BaseModel):
         allowed = {
             "change_travel_pace": {"pace"},
             "change_budget": {"amount_inr", "adjustment", "currency"},
-            "change_duration": {"duration_days"},
+            "change_duration": {"duration_days", "direction", "additional_context"},
             "change_preferences": {
                 "interests", "walking_tolerance", "crowd_tolerance", "risk_tolerance",
                 "transportation_mode",
@@ -124,8 +124,19 @@ class AssistantIntentOutput(BaseModel):
                 isinstance(days, bool) or not isinstance(days, int) or not 1 <= days <= 60
             ):
                 raise ValueError("Duration must be between 1 and 60 days.")
-            if not self.requires_clarification and set(self.parameters) != {"duration_days"}:
-                raise ValueError("Duration is required.")
+            direction = self.parameters.get("direction")
+            if "direction" in self.parameters and direction not in {"extend", "shorten"}:
+                raise ValueError("Duration direction must be extend or shorten.")
+            context = self.parameters.get("additional_context")
+            if "additional_context" in self.parameters and (
+                not isinstance(context, str) or len(context) > 300
+            ):
+                raise ValueError("Duration context must be at most 300 characters.")
+            allowed_duration_parameters = {"duration_days", "direction", "additional_context"}
+            if set(self.parameters) - allowed_duration_parameters:
+                raise ValueError("Unexpected duration parameter.")
+            if not self.requires_clarification and not {"duration_days", "direction"}.issubset(self.parameters):
+                raise ValueError("Requested duration and direction are required.")
         elif self.action == "change_preferences":
             interest_values = self.parameters.get("interests")
             supported_interests = {

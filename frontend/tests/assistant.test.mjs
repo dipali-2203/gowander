@@ -65,3 +65,11 @@ test("attraction proposals show catalog details without turning unknown values i
   assert.match(ui, /Accept changes/);
   assert.match(ui, /Reject/);
 });
+
+test("duration proposals identify trip days added and removed", () => {
+  assert.match(ui, /Trip duration/);
+  assert.match(ui, /Added \{change\.days_added\.map\(\(day\) => `Day \$\{day\}`\)/);
+  assert.match(ui, /Removed \{change\.days_removed\.map\(\(day\) => `Day \$\{day\}`\)/);
+  assert.match(api, /days_added\?: number\[\]/);
+  assert.match(api, /days_removed\?: number\[\]/);
+});

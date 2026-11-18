@@ -1,6 +1,5 @@
 from copy import deepcopy
-from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select, update
@@ -169,6 +168,7 @@ def accept_assistant_proposal(
         expected_types = {
             "change_travel_pace": "travel_pace_change",
             "change_budget": "budget_change",
+            "change_duration": "duration_change",
             "change_preferences": "preference_change",
             "change_attractions": "attraction_change",
         }
@@ -190,6 +190,31 @@ def accept_assistant_proposal(
         itinerary = MultiDayItineraryResponse.model_validate(proposal.proposed_itinerary).model_dump(mode="json")
         if itinerary.get("trip_id") != trip.id:
             raise ValueError("Trip mismatch")
+        start_date = date.fromisoformat(proposed_inputs.get("start_date", trip.start_date.isoformat()))
+        end_date = date.fromisoformat(proposed_inputs.get("end_date", trip.end_date.isoformat()))
+        if start_date != trip.start_date or end_date < start_date or (end_date - start_date).days >= 60:
+            raise ValueError("Invalid staged trip dates")
+        if intent.action == "change_duration":
+            current_days = (trip.end_date - trip.start_date).days + 1
+            proposed_days = (end_date - start_date).days + 1
+            requested_days = intent.parameters["duration_days"]
+            if proposed_days != requested_days or requested_days == current_days:
+                raise ValueError("Duration mismatch")
+            direction = "extend" if requested_days > current_days else "shorten"
+            if intent.parameters.get("direction") != direction:
+                raise ValueError("Duration direction mismatch")
+            days = itinerary.get("days", [])
+            if len(days) != proposed_days:
+                raise ValueError("Itinerary duration mismatch")
+            for index, day in enumerate(days, start=1):
+                if day.get("day_number") != index or day.get("date") != (start_date + timedelta(days=index - 1)).isoformat():
+                    raise ValueError("Itinerary day dates are inconsistent")
+            scheduled_ids = [
+                str(stop.get("attraction_id"))
+                for day in days for stop in day.get("stops", [])
+            ]
+            if len(scheduled_ids) != len(set(scheduled_ids)):
+                raise ValueError("Duplicate scheduled activity")
         allowed_ids = {str(item["id"]) for item in planning_inputs["attractions"]}
         if any(
             str(stop.get("attraction_id")) not in allowed_ids
@@ -232,6 +257,8 @@ def accept_assistant_proposal(
         )
         .values(
             budget=budget,
+            start_date=start_date,
+            end_date=end_date,
             preferences=preferences,
             planning_options=planning_options,
             planning_inputs=planning_inputs,
@@ -274,6 +301,8 @@ def accept_assistant_proposal(
         "proposal": proposal_to_dict(proposal),
         "trip": {
             "id": trip.id,
+            "start_date": trip.start_date.isoformat(),
+            "end_date": trip.end_date.isoformat(),
             "budget": trip.budget,
             "preferences": trip.preferences,
             "planning_inputs": trip.planning_inputs,

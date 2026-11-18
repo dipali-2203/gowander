@@ -1,4 +1,5 @@
 import asyncio
+from copy import deepcopy
 import json
 import time
 from types import SimpleNamespace
@@ -47,6 +48,7 @@ def client(monkeypatch):
 
     app.dependency_overrides[get_db] = override_get_db
     with TestClient(app) as test_client:
+        test_client.testing_session = testing_session
         yield test_client
     app.dependency_overrides.clear()
     Base.metadata.drop_all(bind=engine)
@@ -82,7 +84,7 @@ def create_trip(client: TestClient):
     return response.json()["id"]
 
 
-def create_plannable_trip(client: TestClient, email="proposal@example.com", attractions=None):
+def create_plannable_trip(client: TestClient, email="proposal@example.com", attractions=None, confirmed_activities=None):
     signup(client, email)
     trip_id = create_trip(client)
     changed = client.put(f"/api/v1/trips/{trip_id}", headers={"Origin": ORIGIN}, json={"available_minutes_per_day": 1140})
@@ -99,6 +101,7 @@ def create_plannable_trip(client: TestClient, email="proposal@example.com", attr
             }],
             "data_source": "user_supplied",
             "meal_breaks": [],
+            "confirmed_activities": confirmed_activities or [],
         },
     )
     assert response.status_code == 200, response.text
@@ -139,6 +142,20 @@ def test_chat_requires_authentication(client: TestClient):
         json={"message": "What can I do in Jaipur?"},
     )
     assert response.status_code == 401
+
+
+def test_duration_intent_requires_supported_total_and_direction():
+    valid = AssistantIntentOutput.model_validate(duration_intent(4, "extend"))
+    assert valid.parameters["duration_days"] == 4
+    for parameters in (
+        {"duration_days": 4},
+        {"duration_days": 61, "direction": "extend"},
+        {"duration_days": 4, "direction": "increase"},
+    ):
+        with pytest.raises(ValueError):
+            AssistantIntentOutput.model_validate({
+                **duration_intent(4, "extend"), "parameters": parameters,
+            })
 
 
 def test_chat_general_conversation_works_without_trip_context(client, monkeypatch):
@@ -731,6 +748,7 @@ def test_preference_proposal_accepts_supported_fields_and_preserves_completed(cl
     })
     assert response.status_code == 200, response.text
     proposal = response.json()["proposal"]
+    assert proposal is not None, response.json()["response"]
     assert proposal["type"] == "preference_change"
     pending = client.get(f"/api/v1/trips/{trip_id}").json()
     assert pending["preferences"] == before["preferences"]
@@ -1166,19 +1184,142 @@ def test_repeated_chat_request_id_returns_existing_proposal(client, monkeypatch)
     assert calls == 1
 
 
-def test_unsupported_duration_does_not_create_proposal(client, monkeypatch):
-    trip_id = create_plannable_trip(client, "duration-proposal@example.com")
-    mock_intent(monkeypatch, {
-        "intent": "modify_trip", "action": "change_duration", "parameters": {"duration_days": 4},
+def duration_intent(days, direction):
+    return {
+        "intent": "modify_trip", "action": "change_duration",
+        "parameters": {"duration_days": days, "direction": direction},
         "requires_clarification": False, "clarification_question": None,
-        "response": "I can change duration.",
+        "response": "I can prepare a duration proposal.",
+    }
+
+
+def test_duration_extension_is_staged_planned_and_accepted(client, monkeypatch):
+    trip_id = create_plannable_trip(client, "duration-extension@example.com")
+    client.put(f"/api/v1/trips/{trip_id}", headers={"Origin": ORIGIN}, json={"budget": 100000})
+    create_catalog_attraction(client, id="extra-museum", name="Additional Museum", category="museum")
+    before = client.get(f"/api/v1/trips/{trip_id}").json()
+    completed = client.put(f"/api/v1/trips/{trip_id}/completed-activities", headers={"Origin": ORIGIN}, json={
+        "completed_attraction_ids": ["museum"], "itinerary_revision": before["itinerary_revision"],
     })
+    assert completed.status_code == 200
+    before = client.get(f"/api/v1/trips/{trip_id}").json()
+    original_days = before["latest_itinerary"]["days"]
+    mock_intent(monkeypatch, duration_intent(4, "extend"))
+    response = client.post("/api/v1/assistant/chat", headers={"Origin": ORIGIN}, json={
+        "trip_id": trip_id, "message": "Extend my Jaipur trip to four days", "conversation_history": [],
+    })
+    assert response.status_code == 200, response.text
+    proposal = response.json()["proposal"]
+    assert proposal is not None, response.json()["response"]
+    assert proposal["type"] == "duration_change"
+    assert proposal["validation"]["valid"] is True, proposal["validation"]
+    assert proposal["changes"][0]["days_added"] == [4]
+    assert proposal["budget_comparison"]["after"]["budget_limit"] == 100000
+    proposed_days = proposal["proposed_itinerary"]["days"]
+    assert len(proposed_days) == 4
+    assert proposed_days[:3] == original_days
+    assert [day["date"] for day in proposed_days] == [
+        "2026-12-01", "2026-12-02", "2026-12-03", "2026-12-04",
+    ]
+    assert any(stop["attraction_id"] == "extra-museum" for stop in proposed_days[3]["stops"])
+    scheduled_ids = [stop["attraction_id"] for day in proposed_days for stop in day["stops"]]
+    assert len(scheduled_ids) == len(set(scheduled_ids))
+    assert client.get(f"/api/v1/trips/{trip_id}").json()["end_date"] == "2026-12-03"
+    accepted = client.post(f"/api/v1/assistant/proposals/{proposal['proposal_id']}/accept", headers={"Origin": ORIGIN})
+    assert accepted.status_code == 200, accepted.text
+    saved = client.get(f"/api/v1/trips/{trip_id}").json()
+    assert saved["start_date"] == "2026-12-01"
+    assert saved["end_date"] == "2026-12-04"
+    assert saved["itinerary_revision"] == before["itinerary_revision"] + 1
+    assert saved["itinerary_history"][-1]["itinerary"] == before["latest_itinerary"]
+    assert saved["latest_itinerary"]["days"][:3] == original_days
+    assert saved["completed_attraction_ids"] == ["museum"]
+
+
+def test_duration_extension_without_catalog_candidates_creates_no_proposal(client, monkeypatch):
+    trip_id = create_plannable_trip(client, "duration-no-candidates@example.com")
+    mock_intent(monkeypatch, duration_intent(4, "extend"))
     response = client.post("/api/v1/assistant/chat", headers={"Origin": ORIGIN}, json={
         "trip_id": trip_id, "message": "Extend it by one day", "conversation_history": [],
     })
     assert response.status_code == 200
     assert response.json()["proposal"] is None
-    assert "not supported yet" in response.json()["response"]
+    assert "no unscheduled attractions" in response.json()["response"]
+
+
+def test_duration_shortening_proposal_preserves_completed_activity_and_rejects_cleanly(client, monkeypatch):
+    trip_id = create_plannable_trip(client, "duration-shortening-reject@example.com")
+    before = client.get(f"/api/v1/trips/{trip_id}").json()
+    completed = client.put(f"/api/v1/trips/{trip_id}/completed-activities", headers={"Origin": ORIGIN}, json={
+        "completed_attraction_ids": ["museum"], "itinerary_revision": before["itinerary_revision"],
+    })
+    assert completed.status_code == 200
+    mock_intent(monkeypatch, duration_intent(2, "shorten"))
+    response = client.post("/api/v1/assistant/chat", headers={"Origin": ORIGIN}, json={
+        "trip_id": trip_id, "message": "Reduce my trip to two days", "conversation_history": [],
+    })
+    proposal = response.json()["proposal"]
+    assert proposal is not None, response.json()["response"]
+    assert proposal["validation"]["valid"] is True
+    assert proposal["changes"][0]["days_removed"] == [3]
+    assert len(proposal["proposed_itinerary"]["days"]) == 2
+    preserved = next(
+        (day["day_number"], stop["arrival_minute"])
+        for day in proposal["proposed_itinerary"]["days"] for stop in day["stops"]
+        if stop["attraction_id"] == "museum"
+    )
+    original = next(
+        (day["day_number"], stop["arrival_minute"])
+        for day in before["latest_itinerary"]["days"] for stop in day["stops"]
+        if stop["attraction_id"] == "museum"
+    )
+    assert preserved == original
+    rejected = client.post(
+        f"/api/v1/assistant/proposals/{proposal['proposal_id']}/reject", headers={"Origin": ORIGIN},
+    )
+    assert rejected.status_code == 200
+    unchanged = client.get(f"/api/v1/trips/{trip_id}").json()
+    assert unchanged["start_date"] == before["start_date"]
+    assert unchanged["end_date"] == before["end_date"]
+    assert unchanged["latest_itinerary"] == before["latest_itinerary"]
+    assert unchanged["completed_attraction_ids"] == ["museum"]
+
+
+def test_duration_shortening_rejects_completed_activity_on_removed_day(client, monkeypatch):
+    trip_id = create_plannable_trip(
+        client, "duration-completed-removed@example.com",
+    )
+    with client.testing_session() as db:
+        trip = db.get(Trip, trip_id)
+        snapshot = deepcopy(trip.latest_itinerary)
+        stop = snapshot["days"][0]["stops"].pop()
+        stop["arrival_minute"] = 600
+        stop["departure_minute"] = 660
+        snapshot["days"][2]["stops"].append(stop)
+        trip.latest_itinerary = snapshot
+        inputs = deepcopy(trip.planning_inputs)
+        inputs["confirmed_activities"] = [{"attraction_id": "museum", "day_number": 3, "start_minute": 600}]
+        trip.planning_inputs = inputs
+        db.commit()
+    saved = client.get(f"/api/v1/trips/{trip_id}").json()
+    assert any(
+        day["day_number"] == 3 and any(stop["attraction_id"] == "museum" for stop in day["stops"])
+        for day in saved["latest_itinerary"]["days"]
+    ), saved["latest_itinerary"]["days"]
+    completed = client.put(f"/api/v1/trips/{trip_id}/completed-activities", headers={"Origin": ORIGIN}, json={
+        "completed_attraction_ids": ["museum"], "itinerary_revision": saved["itinerary_revision"],
+    })
+    assert completed.status_code == 200
+    mock_intent(monkeypatch, duration_intent(2, "shorten"))
+    response = client.post("/api/v1/assistant/chat", headers={"Origin": ORIGIN}, json={
+        "trip_id": trip_id, "message": "Shorten this to two days", "conversation_history": [],
+    })
+    assert response.status_code == 200
+    assert response.json()["proposal"] is None
+    assert "remove a completed activity" in response.json()["response"]
+    unchanged = client.get(f"/api/v1/trips/{trip_id}").json()
+    assert unchanged["end_date"] == "2026-12-03"
+    assert unchanged["completed_attraction_ids"] == ["museum"]
 
 
 def test_proposal_owner_staleness_and_expiration_checks(client, monkeypatch):

@@ -14,6 +14,9 @@ from app.services.assistant.attraction_management import (
     AttractionChangeError, PreparedAttractionChange, prepare_attraction_change,
 )
 from app.services.assistant.schemas import AssistantIntentOutput
+from app.services.assistant.duration_management import (
+    PreparedDurationChange, TripDurationChangeError, prepare_duration_change,
+)
 
 
 PACE_VALUES = {"relaxed": 0.25, "balanced": 0.5, "fast": 0.8}
@@ -255,6 +258,15 @@ def create_trip_proposal(
         return None, "The saved planning inputs are incomplete, so I could not safely create a proposal. Please regenerate the itinerary from the planner first."
 
     attraction_change = None
+    duration_change: PreparedDurationChange | None = None
+    if intent.action == "change_duration":
+        try:
+            duration_change = prepare_duration_change(
+                db=db, trip=trip, request=original_request, intent=intent,
+            )
+        except TripDurationChangeError as exc:
+            return None, str(exc)
+        original_request = duration_change.request
     if intent.action == "change_attractions":
         try:
             attraction_change = prepare_attraction_change(db, trip, original_request, intent)
@@ -265,7 +277,12 @@ def create_trip_proposal(
     proposed_budget = float(trip.budget)
     proposed_preferences = deepcopy(trip.preferences or {})
     proposed_planning_options = deepcopy(trip.planning_options or {})
-    if intent.action == "change_travel_pace":
+    if duration_change is not None:
+        proposed_budget = float(trip.budget)
+        proposal_type = "duration_change"
+        changes = duration_change.changes
+        summary = duration_change.summary
+    elif intent.action == "change_travel_pace":
         if _pace_label(trip.preferences).casefold() == intent.parameters["pace"]:
             return None, f"Your saved trip is already set to a {intent.parameters['pace']} pace. No changes were made."
         proposed_preferences["travel_pace"] = PACE_VALUES[intent.parameters["pace"]]
@@ -334,7 +351,7 @@ def create_trip_proposal(
         changes = []
         summary = f"Update attractions for your {trip.destination} trip"
     else:
-        return None, "Changing trip duration is not supported yet. Shortening a trip can strand completed activities, and the current planner does not safely preserve them across changed trip dates. Your saved trip remains unchanged."
+        return None, "That trip change is not supported. Your saved trip remains unchanged."
 
     confirmed, preservation_errors = _current_completed_reservations(trip, original_request)
     if preservation_errors:
@@ -342,7 +359,7 @@ def create_trip_proposal(
     request_data = original_request.model_dump(mode="python")
     request_data["confirmed_activities"] = [item.model_dump(mode="python") for item in confirmed]
     proposed_request = MultiDayOptimizeRequest.model_validate(request_data)
-    staged_trip = _trip_snapshot(
+    staged_trip = duration_change.staged_trip if duration_change is not None else _trip_snapshot(
         trip, budget=proposed_budget, preferences=proposed_preferences,
         planning_options=proposed_planning_options,
     )
@@ -358,7 +375,9 @@ def create_trip_proposal(
 
     selected_attractions = []
     try:
-        if attraction_change is not None and attraction_change.candidate_groups:
+        if duration_change is not None:
+            result = duration_change.result
+        elif attraction_change is not None and attraction_change.candidate_groups:
             working_request = planner_request
             result = None
             for group in attraction_change.candidate_groups:
@@ -417,6 +436,10 @@ def create_trip_proposal(
         proposed_locations.get(item) == original_locations.get(item) for item in completed_ids
     )
     warnings = list(dict.fromkeys(result.get("warnings", [])))
+    if duration_change is not None and intent.parameters.get("additional_context"):
+        warnings.append(
+            "The extra request note is shown for review; the new-day plan follows the saved trip preferences and does not interpret free-text notes as scheduling constraints."
+        )
     if not completed_preserved:
         warnings.append("A completed activity could not be retained on its original day and time; this proposal cannot be accepted safely.")
     if proposed_itinerary.get("budget_estimate", {}).get("unknown_attraction_fee_count", 0):
@@ -435,6 +458,10 @@ def create_trip_proposal(
         "preferences": proposed_preferences,
         "planning_options": proposed_planning_options,
         "planning_inputs": proposed_request.model_dump(mode="json"),
+        **({
+            "start_date": duration_change.start_date.isoformat(),
+            "end_date": duration_change.end_date.isoformat(),
+        } if duration_change else {}),
     }
     payload = {
         "proposal_id": str(uuid4()),

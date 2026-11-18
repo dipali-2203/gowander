@@ -494,6 +494,8 @@ function AssistantProposalCard({
       attraction_added: "Attraction added",
       attraction_removed: "Attraction removed",
       attraction_replaced: "Attraction replaced",
+      trip_duration: "Trip duration",
+      duration_context: "Request note",
     };
     if (interest) {
       return `${interest.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase())} interest weight`;
@@ -541,6 +543,16 @@ function AssistantProposalCard({
                 {changeLabel(change.field)}: {changeValue(change.field, change.before)} →{" "}
                 {changeValue(change.field, change.after)}
               </span>
+              {change.days_added && change.days_added.length > 0 && (
+                <p className="ml-3 text-xs text-muted-foreground">
+                  Added {change.days_added.map((day) => `Day ${day}`).join(", ")}
+                </p>
+              )}
+              {change.days_removed && change.days_removed.length > 0 && (
+                <p className="ml-3 text-xs text-muted-foreground">
+                  Removed {change.days_removed.map((day) => `Day ${day}`).join(", ")}
+                </p>
+              )}
               {change.attraction_id && (
                 <p className="ml-3 mt-1 text-xs text-muted-foreground">
                   {change.day_number ? `Day ${change.day_number}` : "Day not assigned"}

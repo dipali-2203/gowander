@@ -231,6 +231,8 @@ export type AssistantTripProposal = {
     attribution?: string | null;
     license_name?: string | null;
     data_source?: string | null;
+    days_added?: number[];
+    days_removed?: number[];
   }>;
   itinerary_comparison: {
     added_stops: Array<{ attraction_id: string; name: string; day_number: number }>;

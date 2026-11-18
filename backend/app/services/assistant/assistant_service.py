@@ -162,13 +162,6 @@ async def process_assistant_message(
         return intent.clarification_question or intent.response, None
     if trip is None:
         return "Select a saved trip first, and I can prepare a change proposal for it. No trip has been changed.", None
-    if intent.action == "change_duration":
-        return (
-            "Changing trip duration is not supported yet. Shortening a trip can strand completed activities, "
-            "and the current planner cannot safely preserve them across changed dates. Your saved trip remains unchanged.",
-            None,
-        )
-
     proposal, response = create_trip_proposal(
         db=db,
         user_id=user_id,
