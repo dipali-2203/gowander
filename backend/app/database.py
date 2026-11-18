@@ -191,3 +191,44 @@ def migrate_attraction_catalog_schema() -> None:
             "CREATE INDEX IF NOT EXISTS ix_attractions_external_provider_id "
             "ON attractions (external_provider_id)"
         ))
+
+
+def migrate_assistant_proposal_schema(bind=None) -> None:
+    """Add missing assistant proposal columns without rebuilding proposal rows."""
+    target = bind or engine
+    if target.dialect.name != "sqlite":
+        # The current legacy schema mismatch is specific to the local SQLite DB.
+        return
+
+    # Import here because models imports Base from this module.
+    from app.models import AssistantTripProposal
+
+    inspector = inspect(target)
+    table_name = AssistantTripProposal.__tablename__
+    if table_name not in inspector.get_table_names():
+        return
+
+    model_columns = {column.name for column in AssistantTripProposal.__table__.columns}
+    existing_columns = {column["name"] for column in inspector.get_columns(table_name)}
+    missing_columns = model_columns - existing_columns
+    if not missing_columns:
+        return
+
+    # Existing rows need a non-NULL JSON list. SQLite requires a constant default
+    # when adding a NOT NULL column to a populated table.
+    additions = {"changes": "JSON NOT NULL DEFAULT '[]'"}
+    unhandled = missing_columns - additions.keys()
+    if unhandled:
+        raise RuntimeError(
+            "Assistant proposal schema has unmapped model columns: "
+            + ", ".join(sorted(unhandled))
+        )
+
+    with target.begin() as connection:
+        # Re-check inside the migration transaction for safe repeated startup.
+        columns = {column["name"] for column in inspect(connection).get_columns(table_name)}
+        for name in sorted(missing_columns):
+            if name not in columns:
+                connection.execute(text(
+                    f"ALTER TABLE {table_name} ADD COLUMN {name} {additions[name]}"
+                ))

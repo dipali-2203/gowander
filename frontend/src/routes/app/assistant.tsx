@@ -1,13 +1,21 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { Send, Sparkles, User } from "lucide-react";
+import { Check, Send, Sparkles, User, X } from "lucide-react";
 import { EmptyState, PageHeader } from "@/components/travel/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { getUserTrips, sendAssistantMessage, type AccountTrip } from "@/lib/api";
+import {
+  acceptAssistantProposal,
+  getAssistantProposal,
+  getUserTrips,
+  rejectAssistantProposal,
+  sendAssistantMessage,
+  type AccountTrip,
+  type AssistantTripProposal,
+} from "@/lib/api";
 import { useTripStore } from "@/store/trip";
 
 export const Route = createFileRoute("/app/assistant")({
@@ -24,12 +32,16 @@ export const Route = createFileRoute("/app/assistant")({
   component: Assistant,
 });
 
-type Message = { id: number; role: "user" | "assistant"; text: string };
+type Message = {
+  id: number;
+  role: "user" | "assistant";
+  text: string;
+  proposal?: AssistantTripProposal | null;
+};
 
 const prompts = [
-  "Suggest a lower-cost alternative",
-  "Change the trip pace",
-  "Add a food stop",
+  "Make my trip more relaxed",
+  "Change my trip budget",
   "Suggest places nearby",
   "What should I pack?",
 ];
@@ -43,20 +55,24 @@ function Assistant() {
     {
       id: 1,
       role: "assistant",
-      text: "I can answer travel questions and discuss possible trip changes. I will not modify or save your trip in this chat.",
+      text: "I can answer travel questions and prepare trip-change proposals. Nothing changes until you accept a proposal.",
     },
   ]);
   const [input, setInput] = useState("");
   const [typing, setTyping] = useState(false);
+  const [proposalActionId, setProposalActionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const nextMessageId = useRef(2);
   const tripSelectionInitialized = useRef(false);
   const selectedTrip = savedTrips.find((trip) => trip.id === selectedTripId) ?? null;
   const previewItinerary =
-    selectedTripId === generated?.trip_id
+    selectedTrip?.latest_itinerary ??
+    (selectedTripId === generated?.trip_id
       ? generated
-      : (selectedTrip?.latest_itinerary ?? (selectedTripId === null ? generated : null));
+      : selectedTripId === null
+        ? generated
+        : null);
 
   useEffect(() => {
     let active = true;
@@ -114,7 +130,12 @@ function Assistant() {
       });
       setMessages((items) => [
         ...items,
-        { id: nextMessageId.current++, role: "assistant", text: result.response },
+        {
+          id: nextMessageId.current++,
+          role: "assistant",
+          text: result.response,
+          proposal: result.proposal,
+        },
       ]);
     } catch (cause) {
       setError(
@@ -127,13 +148,74 @@ function Assistant() {
     }
   };
 
+  const updateProposalMessage = (proposalId: string, proposal: AssistantTripProposal) => {
+    setMessages((items) =>
+      items.map((item) =>
+        item.proposal?.proposal_id === proposalId ? { ...item, proposal } : item,
+      ),
+    );
+  };
+
+  const handleProposal = async (proposal: AssistantTripProposal, action: "accept" | "reject") => {
+    if (proposalActionId || proposal.status !== "pending") return;
+    setProposalActionId(proposal.proposal_id);
+    setError(null);
+    try {
+      if (action === "accept") {
+        const result = await acceptAssistantProposal(proposal.proposal_id);
+        updateProposalMessage(proposal.proposal_id, result.proposal);
+        let previewRefreshFailed = false;
+        try {
+          setSavedTrips(await getUserTrips());
+        } catch {
+          previewRefreshFailed = true;
+        }
+        setMessages((items) => [
+          ...items,
+          {
+            id: nextMessageId.current++,
+            role: "assistant",
+            text: previewRefreshFailed
+              ? "Your itinerary has been updated and saved. Reload the page if the preview does not refresh."
+              : "Your itinerary has been updated and saved. The current trip preview is refreshed.",
+          },
+        ]);
+      } else {
+        const result = await rejectAssistantProposal(proposal.proposal_id);
+        updateProposalMessage(proposal.proposal_id, result.proposal);
+        setMessages((items) => [
+          ...items,
+          {
+            id: nextMessageId.current++,
+            role: "assistant",
+            text: "No changes were made. Your original itinerary remains unchanged.",
+          },
+        ]);
+      }
+    } catch (cause) {
+      try {
+        const refreshedProposal = await getAssistantProposal(proposal.proposal_id);
+        updateProposalMessage(proposal.proposal_id, refreshedProposal);
+      } catch {
+        // Keep the locally visible proposal if its status cannot be refreshed.
+      }
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "The proposal could not be processed. Please try again.",
+      );
+    } finally {
+      setProposalActionId(null);
+    }
+  };
+
   const changeTripContext = (value: string) => {
     setSelectedTripId(value ? Number(value) : null);
     setMessages([
       {
         id: nextMessageId.current++,
         role: "assistant",
-        text: "What would you like to know? I will not modify or save your trip.",
+        text: "What would you like to know? I can prepare trip-change proposals for your review.",
       },
     ]);
     setError(null);
@@ -143,7 +225,7 @@ function Assistant() {
     <div className="space-y-5">
       <PageHeader
         title="AI Assistant"
-        description="Ask travel questions or discuss your saved trip. This assistant does not apply trip changes."
+        description="Ask travel questions or review a proposed change to your saved trip. Nothing is applied without your approval."
       />
 
       <div className="flex flex-wrap items-center gap-3">
@@ -188,14 +270,25 @@ function Assistant() {
                       <Sparkles className="h-4 w-4" />
                     </span>
                   )}
-                  <div
-                    className={
-                      item.role === "user"
-                        ? "max-w-[80%] rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm text-primary-foreground"
-                        : "max-w-[80%] whitespace-pre-wrap rounded-2xl rounded-bl-md bg-muted px-4 py-2.5 text-sm"
-                    }
-                  >
-                    {item.text}
+                  <div className="max-w-[92%] space-y-3">
+                    <div
+                      className={
+                        item.role === "user"
+                          ? "rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm text-primary-foreground"
+                          : "whitespace-pre-wrap rounded-2xl rounded-bl-md bg-muted px-4 py-2.5 text-sm"
+                      }
+                    >
+                      {item.text}
+                    </div>
+                    {item.role === "assistant" && item.proposal && (
+                      <AssistantProposalCard
+                        proposal={item.proposal}
+                        busy={proposalActionId === item.proposal.proposal_id}
+                        anyBusy={proposalActionId !== null}
+                        onAccept={() => void handleProposal(item.proposal!, "accept")}
+                        onReject={() => void handleProposal(item.proposal!, "reject")}
+                      />
+                    )}
                   </div>
                   {item.role === "user" && (
                     <span className="ml-3 grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-muted">
@@ -319,5 +412,163 @@ function Assistant() {
         </aside>
       </div>
     </div>
+  );
+}
+
+function AssistantProposalCard({
+  proposal,
+  busy,
+  anyBusy,
+  onAccept,
+  onReject,
+}: {
+  proposal: AssistantTripProposal;
+  busy: boolean;
+  anyBusy: boolean;
+  onAccept: () => void;
+  onReject: () => void;
+}) {
+  const comparison = proposal.itinerary_comparison;
+  const beforeCounts = new Map(
+    proposal.original_itinerary.days.map((day) => [day.day_number, day.stops.length]),
+  );
+  const afterCounts = new Map(
+    proposal.proposed_itinerary.days.map((day) => [day.day_number, day.stops.length]),
+  );
+  const changedDays = [...new Set([...beforeCounts.keys(), ...afterCounts.keys()])].filter(
+    (day) => beforeCounts.get(day) !== afterCounts.get(day),
+  );
+  const money = (amount: number | undefined | null) =>
+    typeof amount === "number" ? `₹${amount.toLocaleString("en-IN")}` : "Unavailable";
+  const statusLabel: Record<AssistantTripProposal["status"], string> = {
+    pending: "Awaiting your decision",
+    accepted: "Applied",
+    rejected: "Rejected · no changes made",
+    expired: "Expired",
+    stale: "Out of date · create a new proposal",
+  };
+  const changeLabel = (field: string) =>
+    field === "travel_pace" ? "Travel pace" : field === "budget_inr" ? "Trip budget" : field;
+  const changeValue = (field: string, value: string | number) =>
+    field === "budget_inr" && typeof value === "number" ? money(value) : String(value);
+
+  return (
+    <section
+      className="rounded-xl border border-primary/20 bg-background p-4 shadow-sm"
+      aria-label="Trip change proposal"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-primary">
+            Proposed itinerary change
+          </p>
+          <h3 className="mt-1 font-semibold">{proposal.summary}</h3>
+        </div>
+        <Badge variant={proposal.status === "pending" ? "secondary" : "outline"}>
+          {statusLabel[proposal.status]}
+        </Badge>
+      </div>
+
+      {proposal.changes.length > 0 && (
+        <ul className="mt-3 space-y-1 text-sm">
+          {proposal.changes.map((change) => (
+            <li key={change.field}>
+              {changeLabel(change.field)}: {changeValue(change.field, change.before)} →{" "}
+              {changeValue(change.field, change.after)}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="mt-4 border-t border-border pt-3">
+        <h4 className="text-sm font-medium">Itinerary comparison</h4>
+        {changedDays.length > 0 ? (
+          <ul className="mt-1 space-y-1 text-sm text-muted-foreground">
+            {changedDays.map((day) => (
+              <li key={day}>
+                Day {day}: {beforeCounts.get(day) ?? 0} → {afterCounts.get(day) ?? 0} activities
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-1 text-sm text-muted-foreground">No day activity counts changed.</p>
+        )}
+        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+          <span>{comparison.retained_stops.length} retained</span>
+          <span>{comparison.moved_stops.length} moved</span>
+          <span>{comparison.added_stops.length} added</span>
+          <span>{comparison.removed_stops.length} removed</span>
+        </div>
+        {comparison.added_stops.length +
+          comparison.removed_stops.length +
+          comparison.moved_stops.length >
+          0 && (
+          <ul className="mt-2 space-y-1 text-xs">
+            {comparison.added_stops.map((stop) => (
+              <li key={`add-${stop.attraction_id}`}>
+                Added to Day {stop.day_number}: {stop.name}
+              </li>
+            ))}
+            {comparison.removed_stops.map((stop) => (
+              <li key={`remove-${stop.attraction_id}`}>
+                Removed from Day {stop.day_number}: {stop.name}
+              </li>
+            ))}
+            {comparison.moved_stops.map((move) => (
+              <li key={`move-${move.before.attraction_id}`}>
+                Moved: {move.before.name}, Day {move.before.day_number} → Day{" "}
+                {move.after.day_number}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div className="mt-4 border-t border-border pt-3 text-sm">
+        <h4 className="font-medium">Estimated budget impact</h4>
+        <p className="mt-1 text-muted-foreground">
+          Before: {money(proposal.budget_comparison.before?.total_estimated)} · After:{" "}
+          {money(proposal.budget_comparison.after?.total_estimated)}
+          {proposal.budget_comparison.estimated_difference !== null &&
+            ` · Change: ${money(proposal.budget_comparison.estimated_difference)}`}
+        </p>
+        {proposal.budget_comparison.before?.unknown_attraction_fee_count ||
+        proposal.budget_comparison.after?.unknown_attraction_fee_count ? (
+          <p className="mt-1 text-xs text-amber-700">
+            Some attraction fees are unknown; these are partial estimates, not verified totals.
+          </p>
+        ) : null}
+      </div>
+
+      {proposal.warnings.length > 0 && (
+        <ul className="mt-3 list-disc space-y-1 pl-5 text-xs text-amber-700">
+          {proposal.warnings.map((warning, index) => (
+            <li key={`${index}-${warning}`}>{warning}</li>
+          ))}
+        </ul>
+      )}
+      {!proposal.validation.valid && proposal.validation.issues.length > 0 && (
+        <p className="mt-2 text-xs text-destructive">
+          This proposal did not pass validation and cannot be applied.
+        </p>
+      )}
+
+      {proposal.status === "pending" && (
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            onClick={onAccept}
+            disabled={busy || anyBusy || !proposal.validation.valid}
+          >
+            <Check className="mr-1 h-4 w-4" />
+            {busy ? "Saving…" : "Accept changes"}
+          </Button>
+          <Button size="sm" variant="outline" onClick={onReject} disabled={busy || anyBusy}>
+            <X className="mr-1 h-4 w-4" />
+            {busy ? "Processing…" : "Reject"}
+          </Button>
+        </div>
+      )}
+    </section>
   );
 }

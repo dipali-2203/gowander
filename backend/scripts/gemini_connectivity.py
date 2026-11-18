@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -17,6 +18,12 @@ from dotenv import load_dotenv
 
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.services.assistant.gemini_provider import (  # noqa: E402
+    REQUEST_TIMEOUT_SECONDS,
+    create_gemini_client,
+)
 
 
 def _error_category(status_code: int | None) -> tuple[str, str]:
@@ -61,17 +68,8 @@ async def main() -> int:
         )
         return 2
 
-    from google import genai
-    from google.genai import errors, types
-
-    timeout_seconds = 45
-    client = genai.Client(
-        api_key=api_key,
-        http_options=types.HttpOptions(
-            timeout=timeout_seconds * 1_000,
-            retry_options=types.HttpRetryOptions(attempts=1),
-        ),
-    )
+    timeout_seconds = REQUEST_TIMEOUT_SECONDS
+    client, errors, types = create_gemini_client(api_key)
     started = time.monotonic()
     try:
         response = await asyncio.wait_for(

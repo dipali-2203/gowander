@@ -205,6 +205,48 @@ export type AssistantChatResponse = {
   response: string;
   conversation_id: string | null;
   suggested_actions: string[];
+  proposal: AssistantTripProposal | null;
+};
+
+export type AssistantTripProposal = {
+  proposal_id: string;
+  type: string;
+  status: "pending" | "accepted" | "rejected" | "expired" | "stale";
+  base_revision: number;
+  summary: string;
+  changes: Array<{ field: string; before: string | number; after: string | number }>;
+  itinerary_comparison: {
+    added_stops: Array<{ attraction_id: string; name: string; day_number: number }>;
+    removed_stops: Array<{ attraction_id: string; name: string; day_number: number }>;
+    moved_stops: Array<{
+      before: { attraction_id: string; name: string; day_number: number };
+      after: { attraction_id: string; name: string; day_number: number };
+    }>;
+    retained_stops: Array<{
+      before: { attraction_id: string; name: string; day_number: number };
+      after: { attraction_id: string; name: string; day_number: number };
+    }>;
+  };
+  budget_comparison: {
+    currency: string;
+    before: {
+      total_estimated?: number;
+      is_complete?: boolean;
+      unknown_attraction_fee_count?: number;
+    } | null;
+    after: {
+      total_estimated?: number;
+      is_complete?: boolean;
+      unknown_attraction_fee_count?: number;
+    } | null;
+    estimated_difference: number | null;
+    difference_status: "estimated" | "unavailable";
+  };
+  validation: { valid: boolean; issues: string[] };
+  warnings: string[];
+  original_itinerary: GeneratedItinerary;
+  proposed_itinerary: GeneratedItinerary;
+  expires_at: string | null;
 };
 
 export type UserTravelPreferences = {
@@ -609,6 +651,34 @@ export function sendAssistantMessage(input: {
     method: "POST",
     body: JSON.stringify(input),
   });
+}
+
+export function getAssistantProposal(proposalId: string) {
+  return request<AssistantTripProposal>(
+    `/api/v1/assistant/proposals/${encodeURIComponent(proposalId)}`,
+  );
+}
+
+export function acceptAssistantProposal(proposalId: string) {
+  return request<{
+    proposal: AssistantTripProposal;
+    trip: {
+      id: number;
+      budget: number;
+      preferences: Record<string, unknown>;
+      planning_inputs: Record<string, unknown>;
+      latest_itinerary: GeneratedItinerary;
+      itinerary_revision: number;
+      completed_attraction_ids: string[];
+    };
+  }>(`/api/v1/assistant/proposals/${encodeURIComponent(proposalId)}/accept`, { method: "POST" });
+}
+
+export function rejectAssistantProposal(proposalId: string) {
+  return request<{ proposal: AssistantTripProposal; message: string }>(
+    `/api/v1/assistant/proposals/${encodeURIComponent(proposalId)}/reject`,
+    { method: "POST" },
+  );
 }
 
 export function getHotelRecommendations(tripId: number) {

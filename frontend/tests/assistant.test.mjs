@@ -21,8 +21,14 @@ test("assistant exposes loading and recoverable error states without mock replie
   assert.doesNotMatch(ui, /const replies:/);
 });
 
-test("assistant does not expose provider credentials or implement trip mutations", () => {
+test("assistant keeps provider credentials private and only applies explicit proposal actions", () => {
   assert.doesNotMatch(ui, /GEMINI_API_KEY|generativelanguage\.googleapis\.com/);
   assert.doesNotMatch(ui, /regenerateTrip\(|acceptWeatherReplan\(|selectTripAccommodation\(/);
-  assert.match(ui, /does not apply trip changes/);
+  assert.match(api, /acceptAssistantProposal/);
+  assert.match(api, /rejectAssistantProposal/);
+  assert.match(ui, /Proposed itinerary change/);
+  assert.match(ui, /Accept changes/);
+  assert.match(ui, /No changes were made/);
+  assert.match(ui, /proposal\.validation\.valid/);
+  assert.match(ui, /getUserTrips\(\)/);
 });
