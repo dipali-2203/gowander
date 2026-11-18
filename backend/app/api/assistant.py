@@ -172,7 +172,8 @@ def accept_assistant_proposal(
             "change_preferences": "preference_change",
             "change_attractions": "attraction_change",
         }
-        if expected_types.get(intent.action) != proposal.proposal_type:
+        expected_type = "combined_change" if intent.modifications else expected_types.get(intent.action)
+        if expected_type != proposal.proposal_type:
             raise ValueError("Proposal action mismatch")
         budget = proposed_inputs["budget"]
         if isinstance(budget, bool) or not isinstance(budget, (int, float)) or not 1 <= budget <= 5_000_000:
@@ -194,14 +195,18 @@ def accept_assistant_proposal(
         end_date = date.fromisoformat(proposed_inputs.get("end_date", trip.end_date.isoformat()))
         if start_date != trip.start_date or end_date < start_date or (end_date - start_date).days >= 60:
             raise ValueError("Invalid staged trip dates")
-        if intent.action == "change_duration":
+        duration_parameters = (
+            next((item.parameters for item in intent.modifications if item.action == "change_duration"), None)
+            if intent.modifications else intent.parameters if intent.action == "change_duration" else None
+        )
+        if duration_parameters is not None:
             current_days = (trip.end_date - trip.start_date).days + 1
             proposed_days = (end_date - start_date).days + 1
-            requested_days = intent.parameters["duration_days"]
+            requested_days = duration_parameters["duration_days"]
             if proposed_days != requested_days or requested_days == current_days:
                 raise ValueError("Duration mismatch")
             direction = "extend" if requested_days > current_days else "shorten"
-            if intent.parameters.get("direction") != direction:
+            if duration_parameters.get("direction") != direction:
                 raise ValueError("Duration direction mismatch")
             days = itinerary.get("days", [])
             if len(days) != proposed_days:

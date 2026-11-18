@@ -247,6 +247,10 @@ def create_trip_proposal(
     intent: AssistantIntentOutput,
     request_id: str | None = None,
 ) -> tuple[dict | None, str]:
+    if intent.modifications:
+        return _create_combined_trip_proposal(
+            db=db, user_id=user_id, trip=trip, intent=intent, request_id=request_id,
+        )
     if not trip.planning_inputs:
         return None, "This saved trip does not have the attraction and planning inputs needed to safely recalculate an itinerary. Generate a saved itinerary in the planner first."
     if not trip.latest_itinerary:
@@ -503,6 +507,242 @@ def create_trip_proposal(
     db.commit()
     db.refresh(record)
     return payload, f"I created a proposal for review. It has not been applied to your saved trip. {summary}."
+
+
+def _create_combined_trip_proposal(*, db, user_id: int, trip: Trip, intent: AssistantIntentOutput,
+                                  request_id: str | None) -> tuple[dict | None, str]:
+    """Apply compatible operations to one temporary configuration and persist one proposal."""
+    if not trip.planning_inputs or not trip.latest_itinerary:
+        return None, "Generate and save an itinerary before asking for combined trip changes. No changes were made."
+    try:
+        request = MultiDayOptimizeRequest.model_validate(trip.planning_inputs)
+    except Exception:
+        return None, "The saved planning inputs are incomplete, so I couldn't safely combine these changes. Regenerate the itinerary first."
+
+    operations = [AssistantIntentOutput.model_validate({
+        "intent": "modify_trip", "action": item.action, "parameters": item.parameters,
+        "requires_clarification": False, "clarification_question": None, "response": intent.response,
+    }) for item in intent.modifications]
+    action_names = [item.action for item in operations]
+    if len(set(action_names)) != len(action_names):
+        if action_names.count("change_attractions") > 1:
+            return None, "This request includes multiple attraction operations that may conflict. Which single attraction change should I prepare?"
+        return None, "This request gives conflicting values for the same trip setting. Which value should I use?"
+    operation_by_action = {item.action: item for item in operations}
+    proposed_budget = float(trip.budget)
+    proposed_preferences = deepcopy(trip.preferences or {})
+    proposed_options = deepcopy(trip.planning_options or {})
+    changes: list[dict] = []
+
+    budget_intent = operation_by_action.get("change_budget")
+    if budget_intent:
+        amount = float(budget_intent.parameters["amount_inr"])
+        adjustment = budget_intent.parameters["adjustment"]
+        proposed_budget = (
+            proposed_budget + amount if adjustment == "increase_by"
+            else proposed_budget - amount if adjustment == "decrease_by" else amount
+        )
+        if not 1 <= proposed_budget <= 5_000_000:
+            return None, "That combined budget falls outside INR 1 to INR 5,000,000. Please clarify the budget."
+        changes.append({"field": "budget_inr", "before": trip.budget, "after": proposed_budget})
+
+    pace_intent = operation_by_action.get("change_travel_pace")
+    if pace_intent:
+        pace = pace_intent.parameters["pace"]
+        before = _pace_label(proposed_preferences)
+        if before.casefold() == pace:
+            return None, f"The saved trip already has a {pace} pace. Please clarify what other changes you want."
+        proposed_preferences["travel_pace"] = PACE_VALUES[pace]
+        changes.append({"field": "travel_pace", "before": before, "after": pace.capitalize()})
+
+    preference_intent = operation_by_action.get("change_preferences")
+    if preference_intent:
+        parameters = preference_intent.parameters
+        interests = deepcopy(proposed_preferences.get("interests") or {})
+        for key, value in sorted(parameters.get("interests", {}).items()):
+            before = interests.get(key)
+            if before is None or float(before) != float(value):
+                interests[key] = float(value)
+                changes.append({"field": f"interest_{key}", "before": float(before) if before is not None else "Not set", "after": float(value)})
+        if "interests" in parameters:
+            proposed_preferences["interests"] = interests
+        for key in ("walking_tolerance", "crowd_tolerance", "risk_tolerance"):
+            if key in parameters:
+                before = float(proposed_preferences.get(key, Preferences().model_dump()[key]))
+                after = float(parameters[key])
+                if before != after:
+                    proposed_preferences[key] = after
+                    changes.append({"field": key, "before": before, "after": after})
+        if "transportation_mode" in parameters:
+            before = proposed_options.get("transportation_mode", "mixed")
+            after = parameters["transportation_mode"]
+            if before != after:
+                proposed_options["transportation_mode"] = after
+                changes.append({"field": "transportation_mode", "before": str(before), "after": after})
+
+    try:
+        proposed_preferences = Preferences.model_validate(proposed_preferences).model_dump(mode="json")
+        proposed_options = TripPlanningOptions.model_validate(proposed_options).model_dump(mode="json")
+    except Exception:
+        return None, "I couldn't validate all requested preferences against the planner. Please clarify the settings."
+    if preference_intent and not any(
+        item["field"].startswith("interest_") or item["field"] in {
+            "walking_tolerance", "crowd_tolerance", "risk_tolerance", "transportation_mode",
+        } for item in changes
+    ):
+        return None, "Those preferences already match the saved trip. Please clarify what should change."
+
+    staged_trip = _trip_snapshot(
+        trip, budget=proposed_budget, preferences=proposed_preferences, planning_options=proposed_options,
+    )
+    staged_trip.completed_attraction_ids = list(trip.completed_attraction_ids or [])
+    staged_trip.latest_itinerary = deepcopy(trip.latest_itinerary)
+    staged_trip.planning_inputs = deepcopy(trip.planning_inputs)
+    proposed_request = request
+    base_changes = list(changes)
+    attraction_change = None
+    attraction_intent = operation_by_action.get("change_attractions")
+    if attraction_intent:
+        try:
+            attraction_change = prepare_attraction_change(db, staged_trip, proposed_request, attraction_intent)
+        except AttractionChangeError as exc:
+            # Multiple matching targets are a clarification case; missing catalog
+            # items are reported as a limitation, with no proposal persisted.
+            return None, str(exc)
+        proposed_request = attraction_change.request
+
+    confirmed, preservation_errors = _current_completed_reservations(trip, request)
+    if preservation_errors:
+        return None, preservation_errors[0]
+    if attraction_change is not None:
+        confirmed = [item for item in confirmed if item.attraction_id not in {
+            attraction_change.target.id if attraction_change.target else "",
+        }]
+    planning_request = (attraction_change.planning_request if attraction_change else proposed_request).model_copy(update={
+        "confirmed_activities": confirmed,
+    })
+
+    selected_attractions: list = []
+    try:
+        from app.api.trips import _build_saved_multiday_plan
+
+        if attraction_change and attraction_change.candidate_groups:
+            working_request = planning_request
+            result = None
+            for group in attraction_change.candidate_groups:
+                selected = None
+                for candidate in group:
+                    if candidate.id in {item.id for item in selected_attractions}:
+                        continue
+                    planned = _find_plan_with_attraction(
+                        trip=trip, staged_trip=staged_trip, request=working_request,
+                        candidate=candidate, required_day=attraction_change.requested_day,
+                    )
+                    if planned:
+                        working_request, result = planned
+                        selected = candidate
+                        selected_attractions.append(candidate)
+                        proposed_request = _candidate_request(proposed_request, candidate)
+                        break
+                if selected is None:
+                    return None, "The planner couldn't fit all requested attractions with the other changes. Which change should take priority?"
+            confirmed = list(working_request.confirmed_activities)
+        else:
+            result = _build_saved_multiday_plan(staged_trip, planning_request)
+
+        proposed_request = proposed_request.model_copy(update={"confirmed_activities": confirmed})
+
+        if attraction_change:
+            changes, _ = _attraction_change(attraction_change, selected_attractions, result)
+            if attraction_change.operation == "remove":
+                proposed_request = attraction_change.request
+            changes = [*base_changes, *changes]
+        else:
+            changes = list(base_changes)
+
+        if not result.get("feasible"):
+            return None, "The planner couldn't satisfy all requested changes within the saved trip's time and budget constraints. What would you like to prioritize?"
+
+        proposed_itinerary = MultiDayItineraryResponse(
+            trip_id=trip.id, algorithm="greedy_multiday", data_source=proposed_request.data_source,
+            **result,
+        ).model_dump(mode="json")
+        duration_intent = operation_by_action.get("change_duration")
+        duration_change = None
+        if duration_intent:
+            intermediate_trip = _trip_snapshot(
+                trip, budget=proposed_budget, preferences=proposed_preferences,
+                planning_options=proposed_options,
+            )
+            intermediate_trip.latest_itinerary = proposed_itinerary
+            intermediate_trip.completed_attraction_ids = list(trip.completed_attraction_ids or [])
+            intermediate_trip.planning_inputs = proposed_request.model_dump(mode="json")
+            duration_change = prepare_duration_change(
+                db=db, trip=intermediate_trip, request=proposed_request, intent=duration_intent,
+            )
+            result = duration_change.result
+            proposed_request = duration_change.request
+            staged_trip = duration_change.staged_trip
+            changes.extend(duration_change.changes)
+            proposed_itinerary = MultiDayItineraryResponse(
+                trip_id=trip.id, algorithm="greedy_multiday", data_source=proposed_request.data_source,
+                **result,
+            ).model_dump(mode="json")
+    except (ValueError, RuntimeError) as exc:
+        return None, f"I couldn't build a valid combined proposal ({type(exc).__name__}). Your saved trip remains unchanged."
+
+    if not changes:
+        return None, "None of the requested values would change this trip. Please clarify what you want to update."
+
+    original_itinerary = deepcopy(trip.latest_itinerary)
+    comparison = _itinerary_comparison(original_itinerary, proposed_itinerary)
+    completed_preserved = _completed_locations_preserved(trip, proposed_itinerary)
+    warnings = list(dict.fromkeys(result.get("warnings", [])))
+    if not completed_preserved:
+        warnings.append("A completed activity could not be retained at its original day and time; this proposal cannot be accepted safely.")
+    if operation_by_action.get("change_duration") and operation_by_action["change_duration"].parameters.get("additional_context"):
+        warnings.append("The extra request note is shown for review; the planner does not interpret free-text notes as scheduling constraints.")
+    valid = bool(result.get("feasible")) and completed_preserved
+    proposal_type = "combined_change"
+    proposed_inputs = {
+        "budget": proposed_budget,
+        "preferences": proposed_preferences,
+        "planning_options": proposed_options,
+        "planning_inputs": proposed_request.model_dump(mode="json"),
+    }
+    if operation_by_action.get("change_duration"):
+        proposed_inputs["start_date"] = trip.start_date.isoformat()
+        proposed_inputs["end_date"] = duration_change.end_date.isoformat()
+    original_inputs = {
+        "budget": trip.budget, "preferences": deepcopy(trip.preferences or {}),
+        "planning_inputs": deepcopy(trip.planning_inputs),
+    }
+    if request_id:
+        original_inputs["_assistant_request_id"] = request_id
+    summary = f"Combined changes for your {trip.destination} trip"
+    expires_at = datetime.now(timezone.utc) + PROPOSAL_TTL
+    payload = {
+        "proposal_id": str(uuid4()), "type": proposal_type, "status": "pending",
+        "base_revision": trip.itinerary_revision, "summary": summary, "changes": changes,
+        "itinerary_comparison": comparison,
+        "budget_comparison": _budget_comparison(original_itinerary.get("budget_estimate"), proposed_itinerary.get("budget_estimate")),
+        "validation": {"valid": valid, "issues": [] if valid else ["The combined schedule did not preserve every required constraint."]},
+        "warnings": warnings, "original_itinerary": original_itinerary,
+        "proposed_itinerary": proposed_itinerary, "expires_at": expires_at.isoformat(),
+    }
+    record = AssistantTripProposal(
+        id=payload["proposal_id"], user_id=user_id, trip_id=trip.id,
+        proposal_type=proposal_type, status="pending", expires_at=expires_at,
+        base_revision=trip.itinerary_revision, requested_intent=intent.model_dump(mode="json"),
+        original_inputs=original_inputs, proposed_inputs=proposed_inputs,
+        original_itinerary=original_itinerary, proposed_itinerary=proposed_itinerary,
+        changes=changes, budget_comparison=payload["budget_comparison"],
+        validation=payload["validation"], warnings=warnings, summary=summary,
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return payload, f"I created one combined proposal for review. It has not been applied to your saved trip."
 
 
 def _pace_label(preferences: dict | None) -> str:

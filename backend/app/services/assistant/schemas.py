@@ -50,6 +50,16 @@ class AssistantChatResponse(BaseModel):
     proposal: dict[str, Any] | None = None
 
 
+class AssistantModification(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal[
+        "change_travel_pace", "change_budget", "change_duration", "change_preferences",
+        "change_attractions",
+    ]
+    parameters: dict[str, Any] = Field(default_factory=dict)
+
+
 class AssistantIntentOutput(BaseModel):
     """Strict, untrusted structured intent returned by the language model."""
 
@@ -61,6 +71,7 @@ class AssistantIntentOutput(BaseModel):
         "change_attractions",
     ] | None = None
     parameters: dict[str, Any] = Field(default_factory=dict)
+    modifications: list[AssistantModification] = Field(default_factory=list, max_length=5)
     requires_clarification: bool = False
     clarification_question: str | None = Field(default=None, max_length=500)
     response: str = Field(min_length=1, max_length=2_000)
@@ -76,8 +87,20 @@ class AssistantIntentOutput(BaseModel):
     @model_validator(mode="after")
     def validate_allowlisted_action_parameters(self):
         if self.intent != "modify_trip":
-            if self.action is not None or self.parameters:
+            if self.action is not None or self.parameters or self.modifications:
                 raise ValueError("Non-modification intents cannot specify actions or parameters.")
+            return self
+        if self.modifications:
+            if self.action is not None or self.parameters:
+                raise ValueError("Multi-change intents must use modifications only.")
+            if self.requires_clarification:
+                raise ValueError("Clarification responses cannot contain executable modifications.")
+            for item in self.modifications:
+                AssistantIntentOutput.model_validate({
+                    "intent": "modify_trip", "action": item.action,
+                    "parameters": item.parameters, "requires_clarification": False,
+                    "clarification_question": None, "response": self.response,
+                })
             return self
         if self.action is None:
             raise ValueError("Modification intent requires an allowlisted action.")

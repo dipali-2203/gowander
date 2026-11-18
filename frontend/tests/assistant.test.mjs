@@ -73,3 +73,12 @@ test("duration proposals identify trip days added and removed", () => {
   assert.match(api, /days_added\?: number\[\]/);
   assert.match(api, /days_removed\?: number\[\]/);
 });
+
+test("combined proposals render every staged change and clarification replies retain session history", () => {
+  assert.match(ui, /proposal\.changes\.map\(\(change\)/);
+  assert.match(ui, /conversation_history:\s*history/);
+  assert.match(ui, /const historyItems = messages\.slice\(-6\)/);
+  assert.match(ui, /proposal\.status === "pending"/);
+  assert.match(ui, /onAccept=\{\(\) => void handleProposal/);
+  assert.match(ui, /onReject=\{\(\) => void handleProposal/);
+});
