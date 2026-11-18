@@ -2,7 +2,7 @@
 from datetime import date, datetime, timezone
 
 from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, JSON, String, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
@@ -46,6 +46,58 @@ class Trip(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+    accommodation_selection: Mapped["TripAccommodation | None"] = relationship(
+        back_populates="trip", uselist=False, cascade="all, delete-orphan"
+    )
+
+
+class Hotel(Base):
+    """Provider-sourced lodging catalog. Unknown nightly prices remain NULL."""
+
+    __tablename__ = "hotels"
+    __table_args__ = (
+        UniqueConstraint("provider_name", "external_provider_id", name="uq_hotels_provider_identity"),
+    )
+
+    id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    destination: Mapped[str] = mapped_column(String(100), index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    hotel_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    latitude: Mapped[float] = mapped_column(Float, nullable=False)
+    longitude: Mapped[float] = mapped_column(Float, nullable=False)
+    stars: Mapped[float | None] = mapped_column(Float, nullable=True)
+    amenities: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    address: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    website: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    brand: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    nightly_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    price_source: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    provider_name: Mapped[str] = mapped_column(String(40), nullable=False)
+    external_provider_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    source_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    source_dataset: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    license_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    attribution: Mapped[str | None] = mapped_column(String(250), nullable=True)
+    last_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    raw_tags: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
+
+class TripAccommodation(Base):
+    """A user's selected hotel for one saved trip."""
+
+    __tablename__ = "trip_accommodations"
+
+    trip_id: Mapped[int] = mapped_column(
+        ForeignKey("trips.id", ondelete="CASCADE"), primary_key=True
+    )
+    hotel_id: Mapped[str] = mapped_column(ForeignKey("hotels.id"), nullable=False, index=True)
+    selected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    trip: Mapped[Trip] = relationship(back_populates="accommodation_selection")
+    hotel: Mapped[Hotel] = relationship()
 
 
 class TripShare(Base):

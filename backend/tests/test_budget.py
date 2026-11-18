@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from app.models import Trip
+from app.models import Hotel, Trip, TripAccommodation
 from app.schemas import AttractionInput, ItineraryStop
 from app.services.budget import attraction_budget_after_fixed_costs, estimate_trip_budget
 
@@ -121,3 +121,35 @@ def test_expense_estimate_discloses_outbound_return_and_unquoted_costs():
     assert "booking prices" in exclusions
     assert "menu prices" in exclusions
     assert "Parking" in exclusions
+
+
+def test_selected_hotel_sourced_inr_rate_replaces_allowance_without_double_counting(monkeypatch):
+    monkeypatch.setenv("TRIP_HOTEL_ESTIMATE_INR_PER_NIGHT_STANDARD", "1000")
+    hotel = Hotel(
+        id="osm:node:1", destination="Jaipur", name="Mapped Hotel", hotel_type="hotel",
+        latitude=26.92, longitude=75.82, stars=None, amenities=[], nightly_price=2500,
+        price_currency="INR", price_source="OpenStreetMap hotel:price tag",
+        provider_name="openstreetmap", external_provider_id="node/1", raw_tags={},
+    )
+    selected = TripAccommodation(trip_id=1, hotel_id=hotel.id, hotel=hotel)
+    trip = make_trip(accommodation_selection=selected)
+    estimate = estimate_trip_budget(trip=trip, days=[], attractions=[], data_source="osm")
+    accommodation = next(item for item in estimate["categories"] if item["key"] == "accommodation")
+    assert accommodation["amount"] == 5000  # 2 nights, 1 room, sourced INR 2,500/room/night
+    assert accommodation["source"] == "selected_hotel"
+    assert "not a booking quote" in " ".join(estimate["exclusions"])
+
+
+def test_selected_hotel_without_price_keeps_existing_allowance(monkeypatch):
+    monkeypatch.setenv("TRIP_HOTEL_ESTIMATE_INR_PER_NIGHT_STANDARD", "1000")
+    hotel = Hotel(
+        id="osm:node:2", destination="Jaipur", name="Unpriced Hotel", hotel_type="hotel",
+        latitude=26.92, longitude=75.82, stars=None, amenities=[], nightly_price=None,
+        price_currency=None, price_source=None,
+        provider_name="openstreetmap", external_provider_id="node/2", raw_tags={},
+    )
+    trip = make_trip(accommodation_selection=TripAccommodation(trip_id=1, hotel_id=hotel.id, hotel=hotel))
+    estimate = estimate_trip_budget(trip=trip, days=[], attractions=[], data_source="osm")
+    accommodation = next(item for item in estimate["categories"] if item["key"] == "accommodation")
+    assert accommodation["amount"] == 2000
+    assert "no supported INR nightly rate" in " ".join(accommodation["assumptions"])

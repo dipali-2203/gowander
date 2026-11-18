@@ -105,6 +105,22 @@ def _public_itinerary(trip: Trip) -> dict:
         "traveler_count": options.get("traveler_count"),
         "days": days,
         "budget_estimate": budget,
+        "selected_accommodation": (
+            {
+                "name": trip.accommodation_selection.hotel.name,
+                "hotel_type": trip.accommodation_selection.hotel.hotel_type,
+                "address": trip.accommodation_selection.hotel.address,
+                "nightly_price": trip.accommodation_selection.hotel.nightly_price,
+                "price_currency": trip.accommodation_selection.hotel.price_currency,
+                "price_source": trip.accommodation_selection.hotel.price_source,
+                "source_url": trip.accommodation_selection.hotel.source_url,
+                "source_dataset": trip.accommodation_selection.hotel.source_dataset,
+                "attribution": trip.accommodation_selection.hotel.attribution,
+            }
+            if trip.accommodation_selection is not None
+            and trip.accommodation_selection.hotel is not None
+            else None
+        ),
         "attributions": attributions,
     }
 

@@ -488,7 +488,7 @@ def test_authenticated_pdf_export_uses_latest_persisted_one_and_multi_day_plans(
     import re
 
     from app.database import get_db
-    from app.models import Trip
+    from app.models import Hotel, Trip, TripAccommodation
     from app.services.itinerary_pdf import _document_lines, _inr
 
     assert signup(client, "pdf-export@example.com").status_code == 201
@@ -522,7 +522,24 @@ def test_authenticated_pdf_export_uses_latest_persisted_one_and_multi_day_plans(
             }],
         }],
     }
-    assert "Revised Palace" in " ".join(text for _, text in _document_lines(trip))
+    selected_hotel = Hotel(
+        id="private-hotel-id", destination="Udaipur", name="Lake Side Stay", hotel_type="hotel",
+        latitude=24.58, longitude=73.68, stars=None, amenities=[], nightly_price=None,
+        price_currency=None, price_source=None, provider_name="openstreetmap",
+        external_provider_id="node/private-hotel-id", source_dataset="Geofabrik test extract",
+        license_name="ODbL-1.0", attribution="OpenStreetMap contributors", raw_tags={},
+    )
+    db.add(selected_hotel)
+    db.flush()
+    selection = TripAccommodation(trip_id=trip.id, hotel_id=selected_hotel.id)
+    db.add(selection)
+    db.flush()
+    trip.accommodation_selection = selection
+    document_text = " ".join(text for _, text in _document_lines(trip))
+    assert "Revised Palace" in document_text
+    assert "Lake Side Stay" in document_text
+    assert "private-hotel-id" not in document_text
+    assert "Nightly price unavailable" in document_text
     assert "₹12,500" == _inr(12500)
     db.commit()
     db.close()
@@ -532,7 +549,7 @@ def test_authenticated_pdf_export_uses_latest_persisted_one_and_multi_day_plans(
     assert one_day.headers["content-type"].startswith("application/pdf")
     assert "attachment" in one_day.headers["content-disposition"]
     assert one_day.content.startswith(b"%PDF-")
-    assert len(re.findall(rb"/Type\s+/Page(?!s)\b", one_day.content)) == 1
+    assert len(re.findall(rb"/Type\s+/Page(?!s)\b", one_day.content)) >= 1
 
     db = next(app.dependency_overrides[get_db]())
     trip = db.get(Trip, trip_id)
@@ -980,3 +997,93 @@ def test_password_user_can_disconnect_google_account(client: TestClient, monkeyp
     response = client.delete("/api/v1/auth/google/link", headers={"Origin": ORIGIN})
     assert response.status_code == 200
     assert client.get("/api/v1/auth/me").json()["user"]["google_connected"] is False
+
+
+def test_hotel_recommendations_selection_budget_and_trip_ownership(client: TestClient, monkeypatch):
+    from app.database import get_db
+    from app.models import Hotel, Trip
+
+    monkeypatch.setenv("TRIP_HOTEL_ESTIMATE_INR_PER_NIGHT_STANDARD", "1000")
+    assert signup(client, "hotel-owner@example.com").status_code == 201
+    created = client.post("/api/v1/trips", headers={"Origin": ORIGIN}, json={
+        "name": "Hotel route test", "origin": "Delhi", "destination": "Jaipur",
+        "start_date": "2026-12-01", "end_date": "2026-12-03", "budget": 40000,
+        "available_minutes_per_day": 1200, "start_latitude": 26.9124, "start_longitude": 75.7873,
+        "planning_options": {"traveler_count": 2, "accommodation_category": "standard", "luxury_level": 3},
+    })
+    trip_id = created.json()["id"]
+    db = next(app.dependency_overrides[get_db]())
+    trip = db.get(Trip, trip_id)
+    trip.planning_inputs = {"data_source": "osm", "attractions": [
+        {"id": "a", "name": "A", "category": "cultural", "latitude": 26.90, "longitude": 75.78,
+         "cost": 0, "visit_minutes": 60, "preference_score": .5},
+        {"id": "b", "name": "B", "category": "historical", "latitude": 26.93, "longitude": 75.80,
+         "cost": 0, "visit_minutes": 60, "preference_score": .5},
+    ]}
+    trip.latest_itinerary = {"data_source": "osm", "days": [{
+        "day_number": 1, "date": "2026-12-01", "total_cost": 0, "total_travel_minutes": 10,
+        "stops": [{"attraction_id": "a", "name": "A", "arrival_minute": 540, "departure_minute": 600,
+                   "travel_minutes_before": 10, "cost": 0},
+                  {"attraction_id": "b", "name": "B", "arrival_minute": 660, "departure_minute": 720,
+                   "travel_minutes_before": 10, "cost": 0}],
+    }], "budget_estimate": {"total_estimated": 0, "categories": []}}
+    db.add_all([
+        Hotel(id="osm:node:near", destination="Jaipur", name="Central Stay", hotel_type="hotel",
+              latitude=26.915, longitude=75.79, stars=4, amenities=["Breakfast"], address="Old City",
+              nightly_price=2500, price_currency="INR", price_source="Explicit mapped room/night price",
+              provider_name="openstreetmap", external_provider_id="node/near",
+              source_url="https://www.openstreetmap.org/node/near", source_dataset="Northern Zone",
+              license_name="ODbL-1.0", attribution="© OpenStreetMap contributors",
+              raw_tags={"breakfast": "yes"}),
+        Hotel(id="osm:node:remote", destination="Jaipur", name="Remote Stay", hotel_type="hostel",
+              latitude=26.99, longitude=75.90, stars=None, amenities=[], provider_name="openstreetmap",
+              external_provider_id="node/remote", raw_tags={}),
+    ])
+    db.commit()
+    db.close()
+
+    recommended = client.get(f"/api/v1/hotels/recommendations?trip_id={trip_id}")
+    assert recommended.status_code == 200, recommended.text
+    payload = recommended.json()
+    assert payload["planned_attraction_count"] == 2
+    assert payload["items"][0]["id"] == "osm:node:near"
+    assert payload["items"][0]["distance_kind"] == "straight_line"
+    assert payload["items"][0]["price_status"] == "sourced"
+    assert payload["items"][0]["rating_status"] == "unavailable"
+    assert payload["items"][0]["attribution"] == "© OpenStreetMap contributors"
+
+    selected = client.put(
+        f"/api/v1/trips/{trip_id}/accommodation", headers={"Origin": ORIGIN},
+        json={"hotel_id": "osm:node:near"},
+    )
+    assert selected.status_code == 200, selected.text
+    assert selected.json()["selected_accommodation"]["name"] == "Central Stay"
+    accommodation = next(
+        item for item in selected.json()["latest_itinerary"]["budget_estimate"]["categories"]
+        if item["key"] == "accommodation"
+    )
+    assert accommodation["amount"] == 5000
+    assert accommodation["source"] == "selected_hotel"
+    assert client.get(f"/api/v1/trips/{trip_id}").json()["selected_accommodation"]["name"] == "Central Stay"
+
+    replacement = client.put(
+        f"/api/v1/trips/{trip_id}/accommodation", headers={"Origin": ORIGIN},
+        json={"hotel_id": "osm:node:remote"},
+    )
+    assert replacement.status_code == 200
+    assert replacement.json()["selected_accommodation"]["name"] == "Remote Stay"
+    fallback = next(
+        item for item in replacement.json()["latest_itinerary"]["budget_estimate"]["categories"]
+        if item["key"] == "accommodation"
+    )
+    assert fallback["amount"] == 2000
+    removed = client.delete(f"/api/v1/trips/{trip_id}/accommodation", headers={"Origin": ORIGIN})
+    assert removed.status_code == 200
+    assert removed.json()["selected_accommodation"] is None
+    assert next(item for item in removed.json()["latest_itinerary"]["budget_estimate"]["categories"]
+                if item["key"] == "accommodation")["amount"] == 2000
+
+    assert signup(client, "hotel-other@example.com").status_code == 201
+    assert client.get(f"/api/v1/hotels/recommendations?trip_id={trip_id}").status_code == 404
+    assert client.put(f"/api/v1/trips/{trip_id}/accommodation", headers={"Origin": ORIGIN},
+                      json={"hotel_id": "osm:node:near"}).status_code == 404

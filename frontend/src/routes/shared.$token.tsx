@@ -148,6 +148,34 @@ function SharedItineraryPage() {
                 ))}
               </section>
             ) : null}
+            {trip.selected_accommodation ? (
+              <section className="surface space-y-2 p-5">
+                <h2 className="font-semibold">Selected accommodation</h2>
+                <p>
+                  {trip.selected_accommodation.name} ·{" "}
+                  {trip.selected_accommodation.hotel_type.replaceAll("_", " ")}
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  {trip.selected_accommodation.address ?? "Address unavailable"}
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  {trip.selected_accommodation.nightly_price === null
+                    ? "Nightly price unavailable."
+                    : `${trip.selected_accommodation.price_currency} ${trip.selected_accommodation.nightly_price.toLocaleString("en-IN")} per room/night; a source listing, not a booking quote.`}
+                </p>
+                {trip.selected_accommodation.source_url ? (
+                  <a
+                    className="text-xs underline"
+                    href={trip.selected_accommodation.source_url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {trip.selected_accommodation.attribution} ·{" "}
+                    {trip.selected_accommodation.source_dataset ?? "OpenStreetMap"}
+                  </a>
+                ) : null}
+              </section>
+            ) : null}
             {trip.attributions.map((attribution) => (
               <p key={attribution} className="text-xs text-muted-foreground">
                 {attribution}

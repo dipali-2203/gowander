@@ -562,7 +562,12 @@ function Itinerary() {
       })),
     ].sort((left, right) => left.minute - right.minute),
   }));
-  const budgetEstimate = generated.budget_estimate;
+  const budgetEstimate =
+    savedTrips.find((trip) => trip.id === selectedTripId)?.latest_itinerary?.budget_estimate ??
+    generated.budget_estimate;
+  const selectedAccommodation = savedTrips.find(
+    (trip) => trip.id === selectedTripId,
+  )?.selected_accommodation;
   const scheduledIds = new Set(
     generated.days.flatMap((day) => day.stops.map((stop) => stop.attraction_id)),
   );
@@ -659,6 +664,27 @@ function Itinerary() {
           Attraction data attribution: {attribution}
         </p>
       ))}
+
+      {selectedAccommodation ? (
+        <section className="surface flex flex-wrap items-center justify-between gap-3 p-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-primary">
+              Selected accommodation
+            </p>
+            <p className="mt-1 font-medium">{selectedAccommodation.name}</p>
+            <p className="text-sm text-muted-foreground">
+              {selectedAccommodation.nightly_price === null
+                ? "Price unavailable; the configured accommodation allowance is retained."
+                : `${selectedAccommodation.price_currency} ${selectedAccommodation.nightly_price.toLocaleString("en-IN")} per room/night · sourced listing, not a booking quote.`}
+            </p>
+          </div>
+          <Button variant="outline" asChild>
+            <Link to="/app/hotels" search={{ tripId: selectedTripId ?? undefined }}>
+              Manage stay
+            </Link>
+          </Button>
+        </section>
+      ) : null}
 
       {savedTrips.length > 0 ? (
         <label className="flex flex-wrap items-center gap-3 text-sm">

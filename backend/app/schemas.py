@@ -105,6 +105,10 @@ class TripUpdate(BaseModel):
     planning_options: TripPlanningOptions | None = None
 
 
+class TripAccommodationRequest(BaseModel):
+    hotel_id: str = Field(min_length=1, max_length=100)
+
+
 class PreferenceFeedbackEvent(BaseModel):
     category: str = Field(min_length=1, max_length=50)
     rating: float | None = Field(default=None, ge=1, le=5)

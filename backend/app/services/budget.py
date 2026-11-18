@@ -30,6 +30,33 @@ def _configured_amount(key: str, fallback: float) -> float:
     return max(0.0, amount)
 
 
+def _read(item, key: str, default=None):
+    return item.get(key, default) if isinstance(item, dict) else getattr(item, key, default)
+
+
+def _accommodation_cost(trip: Trip, nights: int, rooms: int, options: TripPlanningOptions) -> tuple[float, float, str, str]:
+    selected = getattr(trip, "accommodation_selection", None)
+    hotel = getattr(selected, "hotel", None) if selected is not None else None
+    if hotel is not None and hotel.nightly_price is not None and hotel.price_currency == "INR":
+        nightly_rate = float(hotel.nightly_price)
+        return (
+            round(nights * rooms * nightly_rate, 2), nightly_rate,
+            f"Selected property price from {hotel.price_source or hotel.provider_name}; {nights} nights, {rooms} room(s).",
+            "source_tag",
+        )
+    category_rate = _configured_amount(
+        f"TRIP_HOTEL_ESTIMATE_INR_PER_NIGHT_{options.accommodation_category.upper()}",
+        HOTEL_DEFAULTS[options.accommodation_category],
+    )
+    luxury_factor = 0.7 + (options.luxury_level - 1) * 0.15
+    allowance = round(nights * rooms * category_rate * luxury_factor, 2)
+    assumption = (
+        "Selected property has no supported INR nightly rate; retained the configured allowance. "
+        if hotel is not None else ""
+    ) + f"{nights} nights x {rooms} room(s) x INR {category_rate:g}/room/night x {luxury_factor:.2g} luxury factor; two-person room occupancy assumption."
+    return allowance, category_rate, assumption, "low"
+
+
 def estimate_trip_budget(
     *,
     trip: Trip,
@@ -45,8 +72,8 @@ def estimate_trip_budget(
     rooms = ceil(traveler_count / 2)
     by_id = {item.id: item for item in attractions}
 
-    attraction_cost = round(sum(day["total_cost"] for day in days), 2)
-    scheduled_ids = {stop.attraction_id for day in days for stop in day.get("stops", [])}
+    attraction_cost = round(sum(float(_read(day, "total_cost", 0) or 0) for day in days), 2)
+    scheduled_ids = {str(_read(stop, "attraction_id")) for day in days for stop in (_read(day, "stops", []) or [])}
     unknown_attraction_fees = sum(
         1 for item in attractions if item.id in scheduled_ids and item.cost_known is False
     )
@@ -54,8 +81,8 @@ def estimate_trip_budget(
     journey_count = 0
     for day in days:
         current = (trip.start_latitude, trip.start_longitude)
-        for stop in day["stops"]:
-            attraction = by_id.get(stop.attraction_id)
+        for stop in (_read(day, "stops", []) or []):
+            attraction = by_id.get(_read(stop, "attraction_id"))
             if attraction is None:
                 continue
             location = (attraction.latitude, attraction.longitude)
@@ -85,13 +112,9 @@ def estimate_trip_budget(
     fare_units = traveler_count if normalized_mode in PASSENGER_TRANSPORT else 1
     transportation = round(route_km * rate * fare_units, 2)
 
-    hotel_default = HOTEL_DEFAULTS[options.accommodation_category]
-    luxury_factor = 0.7 + (options.luxury_level - 1) * 0.15
-    nightly_rate = _configured_amount(
-        f"TRIP_HOTEL_ESTIMATE_INR_PER_NIGHT_{options.accommodation_category.upper()}",
-        hotel_default,
+    accommodation, nightly_rate, accommodation_assumption, accommodation_confidence = _accommodation_cost(
+        trip, nights, rooms, options,
     )
-    accommodation = round(nights * rooms * nightly_rate * luxury_factor, 2)
 
     meal_base_per_person_day = _configured_amount("TRIP_MEAL_ESTIMATE_INR_PER_PERSON_PER_DAY", 600.0)
     meal_multiplier = MEAL_MULTIPLIERS[options.accommodation_category] * (0.8 + (options.luxury_level - 1) * 0.1)
@@ -117,10 +140,11 @@ def estimate_trip_budget(
             "assumptions": [f"{route_km:.1f} km over {journey_count} estimated local legs at ₹{rate:g}/km for {options.transportation_mode}.", fallback_assumption],
         },
         {
-            "key": "accommodation", "label": "Accommodation allowance", "amount": accommodation,
-            "source": "configurable_estimate", "confidence": "low",
-            "range_min": round(accommodation * 0.75, 2), "range_max": round(accommodation * 1.4, 2),
-            "assumptions": [f"{nights} nights × {rooms} room(s) × ₹{nightly_rate:g}/room/night × {luxury_factor:.2g} luxury factor; two-person room occupancy assumption.", fallback_assumption],
+            "key": "accommodation", "label": "Selected accommodation" if getattr(trip, "accommodation_selection", None) else "Accommodation allowance", "amount": accommodation,
+            "source": "selected_hotel" if accommodation_confidence == "source_tag" else "configurable_estimate", "confidence": accommodation_confidence,
+            "range_min": accommodation if accommodation_confidence == "source_tag" else round(accommodation * 0.75, 2),
+            "range_max": accommodation if accommodation_confidence == "source_tag" else round(accommodation * 1.4, 2),
+            "assumptions": [accommodation_assumption, fallback_assumption] if accommodation_confidence != "source_tag" else [accommodation_assumption],
         },
         {
             "key": "meals", "label": "Meals allowance", "amount": meals,
@@ -148,7 +172,7 @@ def estimate_trip_budget(
         "categories": categories,
         "exclusions": [
             "Intercity outbound and return travel are excluded because no route or fare provider is configured.",
-            "Hotel amounts are configurable allowances, not actual booking prices or availability.",
+            "Hotel amounts are configurable allowances, not actual booking prices or availability." if accommodation_confidence != "source_tag" else "The selected hotel's mapped nightly price is a sourced listing, not a booking quote or confirmation of availability.",
             "Meal amounts are configurable allowances; actual restaurant and menu prices are unavailable.",
             "Unknown attraction fees use an internal zero-cost optimizer placeholder; this does not mean entry is free.",
             "Parking, travel to or from lodging, and other unconfigured expenses may be excluded.",
@@ -163,14 +187,10 @@ def attraction_budget_after_fixed_costs(trip: Trip) -> float:
     day_count = max(1, (trip.end_date - trip.start_date).days + 1)
     nights = max(0, (trip.end_date - trip.start_date).days)
     rooms = ceil(options.traveler_count / 2)
-    hotel_rate = _configured_amount(
-        f"TRIP_HOTEL_ESTIMATE_INR_PER_NIGHT_{options.accommodation_category.upper()}",
-        HOTEL_DEFAULTS[options.accommodation_category],
-    )
-    hotel_rate *= 0.7 + (options.luxury_level - 1) * 0.15
+    hotel_cost, _, _, _ = _accommodation_cost(trip, nights, rooms, options)
     meal_rate = _configured_amount("TRIP_MEAL_ESTIMATE_INR_PER_PERSON_PER_DAY", 600.0)
     fixed = (
-        nights * rooms * hotel_rate
+        hotel_cost
         + day_count * options.traveler_count * meal_rate * MEAL_MULTIPLIERS[options.accommodation_category] * (0.8 + (options.luxury_level - 1) * 0.1)
         + options.miscellaneous_budget
     )

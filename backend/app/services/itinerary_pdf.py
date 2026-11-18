@@ -62,6 +62,22 @@ def _document_lines(trip: Any) -> list[tuple[str, str]]:
         details.append(f"Travelers: {options['traveler_count']}")
     lines.extend(("body", detail) for detail in details)
     lines.append(("space", ""))
+    selection = getattr(trip, "accommodation_selection", None)
+    selected_hotel = getattr(selection, "hotel", None) if selection is not None else None
+    if selected_hotel is not None:
+        lines.extend([("section", "Selected accommodation"),
+                      ("body", f"{selected_hotel.name} ({selected_hotel.hotel_type.replace('_', ' ')})")])
+        if selected_hotel.nightly_price is not None:
+            lines.append(("body", f"Listed price: {_inr(selected_hotel.nightly_price)} per room per night; {selected_hotel.price_source or 'source listing'}, not a booking quote."))
+        else:
+            lines.append(("body", "Nightly price unavailable; the budget retains its configured accommodation allowance."))
+        if selected_hotel.address:
+            lines.append(("body", selected_hotel.address))
+        if selected_hotel.attribution:
+            lines.append(("small", selected_hotel.attribution))
+        if selected_hotel.source_dataset:
+            lines.append(("small", f"Source dataset: {selected_hotel.source_dataset}"))
+        lines.append(("space", ""))
     lines.append(("section", "Daily itinerary"))
 
     days = itinerary.get("days") if isinstance(itinerary.get("days"), list) else []

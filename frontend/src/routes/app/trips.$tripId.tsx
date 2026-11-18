@@ -717,10 +717,34 @@ function TripDetailsPage() {
       ) : null}
 
       <section className="grid gap-4 md:grid-cols-3">
-        <UnavailableCard
-          title="Accommodation"
-          detail="No hotel inventory or live availability provider is configured. This trip stores your preferred category, but does not claim a property or price."
-        />
+        {trip.selected_accommodation ? (
+          <section className="surface space-y-2 p-4">
+            <h2 className="font-medium">Selected accommodation</h2>
+            <p>{trip.selected_accommodation.name}</p>
+            <p className="text-sm text-muted-foreground">
+              {trip.selected_accommodation.nightly_price === null
+                ? "Nightly price unavailable; existing allowance retained."
+                : `${trip.selected_accommodation.price_currency} ${trip.selected_accommodation.nightly_price.toLocaleString("en-IN")} per room/night.`}
+            </p>
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/app/hotels" search={{ tripId: trip.id }}>
+                Change or remove stay
+              </Link>
+            </Button>
+          </section>
+        ) : (
+          <section className="surface space-y-2 p-4">
+            <h2 className="font-medium">Accommodation</h2>
+            <p className="text-sm text-muted-foreground">
+              No stay selected. Prices and booking availability are not fabricated.
+            </p>
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/app/hotels" search={{ tripId: trip.id }}>
+                Find a stay
+              </Link>
+            </Button>
+          </section>
+        )}
         <UnavailableCard
           title="Restaurants and meals"
           detail="No restaurant or menu-price provider is configured. Meal preferences are saved; recommendations and prices are not fabricated."

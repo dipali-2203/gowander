@@ -196,6 +196,17 @@ export type AuthUser = {
   travel_preferences: UserTravelPreferences;
 };
 
+export type AssistantChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+export type AssistantChatResponse = {
+  response: string;
+  conversation_id: string | null;
+  suggested_actions: string[];
+};
+
 export type UserTravelPreferences = {
   interests: string[];
   styles: string[];
@@ -235,7 +246,80 @@ export type AccountTrip = {
   itinerary_revision: number;
   completed_attraction_ids: string[];
   pending_itinerary_revision: WeatherReplanProposal | null;
+  selected_accommodation: SelectedAccommodation | null;
   itinerary_history?: Array<{ revision: number; saved_at: string; itinerary: GeneratedItinerary }>;
+};
+
+export type SelectedAccommodation = {
+  hotel_id: string;
+  name: string;
+  hotel_type: string;
+  nightly_price: number | null;
+  price_currency: string | null;
+  price_source: string | null;
+  price_status: "sourced" | "unavailable";
+  destination: string;
+  source_url: string | null;
+  source_dataset: string | null;
+  attribution: string | null;
+};
+
+export type HotelRecommendation = {
+  id: string;
+  name: string;
+  destination: string;
+  hotel_type: string;
+  latitude: number;
+  longitude: number;
+  stars: number | null;
+  amenities: string[];
+  address: string | null;
+  website: string | null;
+  phone: string | null;
+  brand: string | null;
+  nightly_price: number | null;
+  price_currency: string | null;
+  price_source: string | null;
+  price_status: "sourced" | "unavailable";
+  rating_status: "unavailable";
+  score: number | null;
+  score_confidence: "limited" | "standard";
+  factor_scores: Record<string, number | null>;
+  average_distance_km: number | null;
+  nearest_distance_km: number | null;
+  distance_kind: "straight_line" | "unavailable";
+  reasons: string[];
+  label: string | null;
+  filter_tags: string[];
+  selected: boolean;
+  source: string;
+  source_dataset: string | null;
+  source_url: string | null;
+  license_name: string | null;
+  attribution: string | null;
+  last_fetched_at: string | null;
+};
+
+export type HotelRecommendations = {
+  trip: {
+    id: number;
+    name: string;
+    destination: string;
+    start_date: string;
+    end_date: string;
+    nights: number;
+    traveler_count: number | null;
+    budget: number;
+    accommodation_category: string | null;
+  };
+  planned_attraction_count: number;
+  distance_method: "straight_line_haversine";
+  score_method: "weighted_mean_of_available_factors";
+  score_note: string;
+  factor_weights: Record<string, number>;
+  items: HotelRecommendation[];
+  selected_accommodation: SelectedAccommodation | null;
+  attribution: string | null;
 };
 
 export type WeatherReplanProposal = {
@@ -370,6 +454,17 @@ export type SharedItinerary = {
     categories: Array<{ label: string | null; amount: number | null }>;
     exclusions: string[];
   } | null;
+  selected_accommodation: {
+    name: string;
+    hotel_type: string;
+    address: string | null;
+    nightly_price: number | null;
+    price_currency: string | null;
+    price_source: string | null;
+    source_url: string | null;
+    source_dataset: string | null;
+    attribution: string | null;
+  } | null;
   attributions: string[];
 };
 
@@ -503,6 +598,38 @@ export async function getUserTrips() {
 
 export async function getTrip(tripId: number) {
   return request<TripDetails>(`/api/v1/trips/${tripId}`);
+}
+
+export function sendAssistantMessage(input: {
+  message: string;
+  trip_id: number | null;
+  conversation_history: AssistantChatMessage[];
+}) {
+  return request<AssistantChatResponse>("/api/v1/assistant/chat", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function getHotelRecommendations(tripId: number) {
+  return request<HotelRecommendations>(`/api/v1/hotels/recommendations?trip_id=${tripId}`);
+}
+
+export function selectTripAccommodation(tripId: number, hotelId: string) {
+  return request<{
+    selected_accommodation: SelectedAccommodation;
+    latest_itinerary: GeneratedItinerary | null;
+  }>(`/api/v1/trips/${tripId}/accommodation`, {
+    method: "PUT",
+    body: JSON.stringify({ hotel_id: hotelId }),
+  });
+}
+
+export function removeTripAccommodation(tripId: number) {
+  return request<{ selected_accommodation: null; latest_itinerary: GeneratedItinerary | null }>(
+    `/api/v1/trips/${tripId}/accommodation`,
+    { method: "DELETE" },
+  );
 }
 
 export function createTripShareLink(tripId: number) {

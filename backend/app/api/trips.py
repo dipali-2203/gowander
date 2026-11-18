@@ -5,7 +5,7 @@ import os
 from datetime import datetime, timezone
 
 from app.database import get_db
-from app.models import Trip, TripShare, Attraction, User
+from app.models import Trip, TripShare, TripAccommodation, Attraction, User
 from app.api.auth import get_current_user, require_trip_access
 from app.schemas import (
     AttractionInput,
@@ -44,6 +44,7 @@ from app.services.weather import WeatherProviderError
 from app.services.weather_replanning import build_weather_proposal
 from app.services.trip_sharing import build_share_token, new_public_id
 from app.services.itinerary_pdf import itinerary_pdf_filename, render_itinerary_pdf
+from app.services.hotel_recommendations import selected_accommodation_payload
 from sqlalchemy import update
 
 router = APIRouter(prefix="/api/v1/trips", tags=["Trips"], dependencies=[Depends(require_trip_access)])
@@ -169,6 +170,7 @@ def list_trips(db: Session = Depends(get_db), user: User = Depends(get_current_u
             "itinerary_revision": trip.itinerary_revision,
             "completed_attraction_ids": trip.completed_attraction_ids or [],
             "pending_itinerary_revision": trip.pending_itinerary_revision,
+            "selected_accommodation": selected_accommodation_payload(trip),
         }
         for trip in trips
     ]
@@ -244,6 +246,7 @@ def get_trip(
         "completed_attraction_ids": trip.completed_attraction_ids or [],
         "pending_itinerary_revision": trip.pending_itinerary_revision,
         "itinerary_history": trip.itinerary_history or [],
+        "selected_accommodation": selected_accommodation_payload(trip),
     }
 
 
@@ -354,6 +357,10 @@ def duplicate_trip(trip_id: int, db: Session = Depends(get_db)):
         itinerary_stale=source.itinerary_stale,
     )
     db.add(duplicate)
+    db.flush()
+    selected_stay = source.accommodation_selection
+    if selected_stay is not None:
+        db.add(TripAccommodation(trip_id=duplicate.id, hotel_id=selected_stay.hotel_id))
     db.commit()
     db.refresh(duplicate)
     return {"id": duplicate.id, "name": duplicate.name}

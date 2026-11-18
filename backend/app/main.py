@@ -12,6 +12,8 @@ from app.api.attractions import router as attractions_router
 from app.api.auth import router as auth_router
 from app.api.account import router as account_router
 from app.api.shared_trips import router as shared_trips_router
+from app.api.hotels import router as hotels_router
+from app.api.assistant import router as assistant_router
 from app.database import Base, engine, migrate_attraction_catalog_schema, migrate_auth_schema, migrate_sqlite_schema, migrate_user_profile_schema
 from app import models  # Register SQLAlchemy models
 
@@ -45,6 +47,8 @@ app.include_router(attractions_router)
 app.include_router(auth_router)
 app.include_router(account_router)
 app.include_router(shared_trips_router)
+app.include_router(hotels_router)
+app.include_router(assistant_router)
 
 
 @app.get("/health")

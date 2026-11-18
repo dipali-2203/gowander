@@ -1,15 +1,36 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { useEffect, useMemo, useState } from "react";
+import { BedDouble, ExternalLink, MapPin, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader, EmptyState } from "@/components/travel/PageHeader";
 import { HotelCard } from "@/components/travel/HotelCard";
 import { IndiaMap } from "@/components/travel/IndiaMap";
 import { Button } from "@/components/ui/button";
-import { BedDouble } from "lucide-react";
-import { hotels } from "@/data/hotels";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  getHotelRecommendations,
+  getUserTrips,
+  removeTripAccommodation,
+  selectTripAccommodation,
+  type AccountTrip,
+  type HotelRecommendation,
+  type HotelRecommendations,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/app/hotels")({
+  validateSearch: (search: Record<string, unknown>) => ({
+    tripId:
+      Number.isInteger(Number(search["tripId"])) && Number(search["tripId"]) > 0
+        ? Number(search["tripId"])
+        : undefined,
+  }),
   head: () => ({
     meta: [
       { property: "og:type", content: "website" },
@@ -17,13 +38,12 @@ export const Route = createFileRoute("/app/hotels")({
       { title: "Hotels · GoWander" },
       {
         name: "description",
-        content:
-          "Stay recommendations matched to your route and budget — filter by luxury, family, business or couples.",
+        content: "OpenStreetMap lodging recommendations ranked against a saved itinerary.",
       },
       { property: "og:title", content: "Hotels · GoWander" },
       {
         property: "og:description",
-        content: "AI-matched hotel recommendations along your India itinerary.",
+        content: "Stays ranked by distance to planned activities and available sourced details.",
       },
     ],
   }),
@@ -33,72 +53,410 @@ export const Route = createFileRoute("/app/hotels")({
 const filters = ["All", "Budget", "Luxury", "Family", "Business", "Couples"] as const;
 
 function Hotels() {
+  const { tripId: requestedTripId } = Route.useSearch();
+  const [trips, setTrips] = useState<AccountTrip[]>([]);
+  const [tripsLoading, setTripsLoading] = useState(true);
+  const [selectedTripId, setSelectedTripId] = useState<number | null>(null);
+  const [data, setData] = useState<HotelRecommendations | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<(typeof filters)[number]>("All");
+  const [detail, setDetail] = useState<HotelRecommendation | null>(null);
+  const [savingHotelId, setSavingHotelId] = useState<string | null>(null);
+  const [removing, setRemoving] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    getUserTrips()
+      .then((items) => {
+        if (!active) return;
+        setTrips(items);
+        const requested = items.find(
+          (item) => item.id === requestedTripId && item.latest_itinerary,
+        );
+        setSelectedTripId(requested?.id ?? items.find((item) => item.latest_itinerary)?.id ?? null);
+      })
+      .catch((cause) => {
+        if (active)
+          setError(cause instanceof Error ? cause.message : "Could not load your saved trips.");
+      })
+      .finally(() => {
+        if (active) setTripsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [requestedTripId]);
+
+  const loadRecommendations = async (tripId: number) => {
+    setLoading(true);
+    setError(null);
+    try {
+      setData(await getHotelRecommendations(tripId));
+    } catch (cause) {
+      setData(null);
+      setError(cause instanceof Error ? cause.message : "Could not load hotel recommendations.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    const selectedTrip = trips.find((trip) => trip.id === selectedTripId);
+    if (selectedTripId !== null && selectedTrip?.latest_itinerary) {
+      void loadRecommendations(selectedTripId);
+    } else {
+      setData(null);
+      setError(null);
+    }
+  }, [selectedTripId, trips]);
+
   const results = useMemo(
-    () => (filter === "All" ? hotels : hotels.filter((h) => h.tags.includes(filter))),
-    [filter],
+    () =>
+      (data?.items ?? []).filter((hotel) => filter === "All" || hotel.filter_tags.includes(filter)),
+    [data, filter],
   );
+
+  const addHotel = async (hotel: HotelRecommendation) => {
+    if (!selectedTripId) return;
+    setSavingHotelId(hotel.id);
+    try {
+      await selectTripAccommodation(selectedTripId, hotel.id);
+      toast.success(`${hotel.name} selected as accommodation for this trip.`);
+      await loadRecommendations(selectedTripId);
+      setTrips(await getUserTrips());
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "Could not save the selected hotel.");
+    } finally {
+      setSavingHotelId(null);
+    }
+  };
+
+  const removeHotel = async () => {
+    if (!selectedTripId) return;
+    setRemoving(true);
+    try {
+      await removeTripAccommodation(selectedTripId);
+      toast.success("Selected accommodation removed. The configured budget allowance is retained.");
+      await loadRecommendations(selectedTripId);
+      setTrips(await getUserTrips());
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "Could not remove the selected hotel.");
+    } finally {
+      setRemoving(false);
+    }
+  };
+
+  const currentTrip = trips.find((trip) => trip.id === selectedTripId);
+  const selected = data?.selected_accommodation;
 
   return (
     <div className="space-y-5">
       <PageHeader
         title="Stays along your route"
-        description="Ranked by distance to your planned activities, then by price."
+        description="Ranked against all planned visits, your saved-trip accommodation budget, and available preferences. Distances are straight-line estimates."
       />
 
-      <div className="flex flex-wrap gap-2">
-        {filters.map((f) => (
-          <button
-            key={f}
-            type="button"
-            aria-pressed={filter === f}
-            onClick={() => setFilter(f)}
-            className={cn(
-              "rounded-full border px-4 py-1.5 text-sm transition-colors",
-              filter === f
-                ? "border-primary bg-primary-soft text-primary"
-                : "border-border hover:bg-muted",
-            )}
-          >
-            {f}
-          </button>
-        ))}
-      </div>
+      {error && trips.length === 0 && !tripsLoading ? (
+        <p className="surface p-4 text-sm text-destructive" role="alert">
+          {error}
+        </p>
+      ) : tripsLoading ? (
+        <p className="surface p-4 text-sm text-muted-foreground" role="status">
+          Loading saved trips…
+        </p>
+      ) : trips.length === 0 ? (
+        <EmptyState
+          icon={<BedDouble className="h-5 w-5" />}
+          title="Choose a saved trip first"
+          description="Hotel recommendations use a saved multi-day itinerary and its planned attractions."
+          action={
+            <Button asChild>
+              <Link to="/app/planner">Plan a trip</Link>
+            </Button>
+          }
+        />
+      ) : (
+        <>
+          <label className="flex flex-wrap items-center gap-3 text-sm">
+            Saved trip
+            <select
+              aria-label="Select saved trip for hotel recommendations"
+              className="min-w-64 rounded-md border border-input bg-background px-3 py-2"
+              value={selectedTripId ?? ""}
+              onChange={(event) => setSelectedTripId(Number(event.target.value))}
+            >
+              {trips.map((trip) => (
+                <option key={trip.id} value={trip.id}>
+                  {trip.name} · {trip.destination}
+                </option>
+              ))}
+            </select>
+          </label>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
-        <div className="grid gap-4 sm:grid-cols-2">
-          {results.length === 0 ? (
-            <div className="sm:col-span-2">
+          {!selectedTripId ? (
+            <EmptyState
+              icon={<BedDouble className="h-5 w-5" />}
+              title="No saved itinerary is available"
+              description="Generate and save a trip itinerary first. Hotel recommendations never use a random route."
+              action={
+                <Button asChild>
+                  <Link to="/app/planner">Plan a trip</Link>
+                </Button>
+              }
+            />
+          ) : null}
+
+          {currentTrip && !currentTrip.latest_itinerary ? (
+            <EmptyState
+              icon={<BedDouble className="h-5 w-5" />}
+              title="This trip has no saved itinerary yet"
+              description="Generate an itinerary with attraction locations before viewing route-aware stays."
+              action={
+                <Button asChild>
+                  <Link to="/app/planner">Plan this trip</Link>
+                </Button>
+              }
+            />
+          ) : null}
+
+          {selected ? (
+            <section className="surface flex flex-wrap items-center justify-between gap-4 p-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-primary">
+                  Selected accommodation
+                </p>
+                <h2 className="mt-1 font-semibold">{selected.name}</h2>
+                <p className="text-sm text-muted-foreground">
+                  {selected.nightly_price === null
+                    ? "Nightly price unavailable; existing configured accommodation allowance retained."
+                    : `${selected.price_currency} ${selected.nightly_price.toLocaleString("en-IN")} per room/night · sourced listing, not a booking quote.`}
+                </p>
+              </div>
+              <Button variant="outline" disabled={removing} onClick={() => void removeHotel()}>
+                <Trash2 className="h-4 w-4" /> {removing ? "Removing…" : "Remove stay"}
+              </Button>
+            </section>
+          ) : null}
+
+          <div className="flex flex-wrap gap-2" aria-label="Hotel filters">
+            {filters.map((item) => (
+              <button
+                key={item}
+                type="button"
+                aria-pressed={filter === item}
+                onClick={() => setFilter(item)}
+                className={cn(
+                  "rounded-full border px-4 py-1.5 text-sm transition-colors",
+                  filter === item
+                    ? "border-primary bg-primary-soft text-primary"
+                    : "border-border hover:bg-muted",
+                )}
+              >
+                {item}
+              </button>
+            ))}
+          </div>
+
+          {error ? (
+            <p className="surface p-4 text-sm text-destructive" role="alert">
+              {error}
+            </p>
+          ) : null}
+          {loading ? (
+            <p className="surface p-4 text-sm text-muted-foreground" role="status">
+              Finding stays for your itinerary…
+            </p>
+          ) : null}
+
+          {!loading && !error && data && data.items.length === 0 ? (
+            <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
               <EmptyState
                 icon={<BedDouble className="h-5 w-5" />}
-                title="No stays match that filter"
-                description="Try a broader category or widen your nightly budget."
-                action={<Button onClick={() => setFilter("All")}>Reset filters</Button>}
+                title={`No sourced hotel inventory for ${data.trip.destination}`}
+                description="No OSM lodging records have been imported for this destination. GoWander will not fill the list with demonstration properties."
               />
+              <aside className="surface-static overflow-hidden">
+                <div className="h-64">
+                  <IndiaMap showRoutes className="rounded-none" />
+                </div>
+                <p className="p-4 text-sm font-medium">{data.trip.destination} overview</p>
+              </aside>
             </div>
-          ) : (
-            results.map((h) => (
-              <HotelCard
-                key={h.id}
-                hotel={h}
-                onAdd={(hotel) => toast.success(`${hotel.name} added to your trip`)}
-              />
-            ))
-          )}
-        </div>
+          ) : null}
 
-        <aside className="surface-static overflow-hidden xl:sticky xl:top-24 xl:self-start">
-          <div className="h-64">
-            <IndiaMap showRoutes className="rounded-none" />
-          </div>
-          <div className="p-4">
-            <p className="text-sm font-medium">Map preview</p>
+          {!loading && !error && data && data.items.length > 0 && results.length === 0 ? (
+            <EmptyState
+              icon={<BedDouble className="h-5 w-5" />}
+              title="No sourced stays match that filter"
+              description="Filters use explicit OpenStreetMap hotel tags and mapped stars only."
+              action={<Button onClick={() => setFilter("All")}>Reset filters</Button>}
+            />
+          ) : null}
+
+          {!loading && !error && data && results.length > 0 ? (
+            <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
+              <div className="grid content-start gap-4 sm:grid-cols-2">
+                {results.map((hotel) => (
+                  <HotelCard
+                    key={hotel.id}
+                    hotel={hotel}
+                    adding={savingHotelId === hotel.id}
+                    onView={setDetail}
+                    onAdd={(item) => void addHotel(item)}
+                  />
+                ))}
+              </div>
+              <aside className="surface-static overflow-hidden xl:sticky xl:top-24 xl:self-start">
+                <div className="h-64">
+                  <IndiaMap showRoutes className="rounded-none" />
+                </div>
+                <div className="space-y-1 p-4">
+                  <p className="text-sm font-medium">{data.trip.destination} overview</p>
+                  <p className="text-xs text-muted-foreground">
+                    {results.length} sourced stay(s) · {data.planned_attraction_count} planned
+                    attraction visits
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Hotel coordinates open on the source map in each detail view.
+                  </p>
+                </div>
+              </aside>
+            </div>
+          ) : null}
+
+          {data?.attribution ? (
+            <p className="text-xs text-muted-foreground">{data.attribution} · ODbL</p>
+          ) : null}
+          {selectedTripId !== null && data ? (
             <p className="text-xs text-muted-foreground">
-              {results.length} stays across {new Set(results.map((r) => r.city)).size} cities
+              {data.trip.nights} night(s) ·{" "}
+              {data.trip.traveler_count ?? "Traveler count unavailable"} traveler(s) · Budget INR{" "}
+              {data.trip.budget.toLocaleString("en-IN")}
             </p>
-          </div>
-        </aside>
-      </div>
+          ) : null}
+        </>
+      )}
+
+      <Dialog
+        open={detail !== null}
+        onOpenChange={(open) => {
+          if (!open) setDetail(null);
+        }}
+      >
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
+          {detail ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>{detail.name}</DialogTitle>
+                <DialogDescription className="capitalize">
+                  {detail.hotel_type.replaceAll("_", " ")} in {detail.destination}
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4 text-sm">
+                <p>{detail.address ?? "Address unavailable in source data."}</p>
+                <p>
+                  {detail.nightly_price === null
+                    ? "Nightly price unavailable. No booking provider is connected."
+                    : `${detail.price_currency} ${detail.nightly_price.toLocaleString("en-IN")} per room/night · ${detail.price_source ?? "Source price"}. Not a booking quote.`}
+                </p>
+                <p>
+                  {detail.stars === null
+                    ? "Mapped hotel stars unavailable. Guest ratings and review counts are not provided."
+                    : `${detail.stars} stars mapped in OpenStreetMap; this is a property classification, not a guest rating.`}
+                </p>
+                <p>
+                  Website:{" "}
+                  {detail.website ? (
+                    <a className="underline" href={detail.website} target="_blank" rel="noreferrer">
+                      {detail.website}
+                    </a>
+                  ) : (
+                    "unavailable"
+                  )}
+                </p>
+                <p>Contact: {detail.phone ?? "unavailable"}</p>
+                <p>Brand/operator: {detail.brand ?? "unavailable"}</p>
+                <p>
+                  Distance:{" "}
+                  {detail.average_distance_km === null
+                    ? "unavailable"
+                    : `${detail.average_distance_km.toFixed(1)} km average straight-line distance across scheduled visits`}
+                  .
+                  {detail.nearest_distance_km === null
+                    ? ""
+                    : ` Nearest planned visit: ${detail.nearest_distance_km.toFixed(1)} km.`}
+                </p>
+                <div>
+                  <h3 className="font-medium">Why this match?</h3>
+                  {detail.reasons.length ? (
+                    <ul className="mt-1 list-disc space-y-1 pl-5 text-muted-foreground">
+                      {detail.reasons.map((reason) => (
+                        <li key={reason}>{reason}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-muted-foreground">
+                      No supported match factors are available.
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <h3 className="font-medium">Score components</h3>
+                  <ul className="mt-1 space-y-1 text-xs text-muted-foreground">
+                    {Object.entries(detail.factor_scores).map(([factor, score]) => (
+                      <li key={factor} className="flex justify-between gap-4">
+                        <span className="capitalize">
+                          {factor} ({Math.round((data?.factor_weights[factor] ?? 0) * 100)}%
+                          configured weight)
+                        </span>
+                        <span>{score === null ? "Unavailable" : `${score.toFixed(0)}/100`}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="mt-2 text-xs text-muted-foreground">{data?.score_note}</p>
+                </div>
+                <p>
+                  Freshness:{" "}
+                  {detail.last_fetched_at
+                    ? new Date(detail.last_fetched_at).toLocaleString()
+                    : "unknown"}
+                </p>
+                <p>
+                  Dataset: {detail.source_dataset ?? "unavailable"} · License:{" "}
+                  {detail.license_name ?? "unavailable"}
+                </p>
+                {detail.source_url ? (
+                  <p>
+                    {detail.attribution} ·{" "}
+                    <a
+                      className="underline"
+                      href={detail.source_url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Open source object
+                    </a>
+                  </p>
+                ) : null}
+                <p className="text-xs text-muted-foreground">
+                  GoWander does not provide booking availability. Contact or visit the property
+                  website directly.
+                </p>
+                <a
+                  className="inline-flex items-center gap-2 text-primary underline"
+                  href={`https://www.openstreetmap.org/?mlat=${detail.latitude}&mlon=${detail.longitude}#map=17/${detail.latitude}/${detail.longitude}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <MapPin className="h-4 w-4" /> Map location{" "}
+                  <ExternalLink className="h-3.5 w-3.5" />
+                </a>
+              </div>
+            </>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
