@@ -56,7 +56,10 @@ class AssistantIntentOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     intent: Literal["conversation", "modify_trip", "unsupported"]
-    action: Literal["change_travel_pace", "change_budget", "change_duration"] | None = None
+    action: Literal[
+        "change_travel_pace", "change_budget", "change_duration", "change_preferences",
+        "change_attractions",
+    ] | None = None
     parameters: dict[str, Any] = Field(default_factory=dict)
     requires_clarification: bool = False
     clarification_question: str | None = Field(default=None, max_length=500)
@@ -83,6 +86,14 @@ class AssistantIntentOutput(BaseModel):
             "change_travel_pace": {"pace"},
             "change_budget": {"amount_inr", "adjustment", "currency"},
             "change_duration": {"duration_days"},
+            "change_preferences": {
+                "interests", "walking_tolerance", "crowd_tolerance", "risk_tolerance",
+                "transportation_mode",
+            },
+            "change_attractions": {
+                "operation", "attraction_name", "target_name", "replacement_name", "category",
+                "count", "day_number", "position", "criterion",
+            },
         }[self.action]
         if set(self.parameters) - allowed:
             raise ValueError("Unexpected modification parameter.")
@@ -115,6 +126,88 @@ class AssistantIntentOutput(BaseModel):
                 raise ValueError("Duration must be between 1 and 60 days.")
             if not self.requires_clarification and set(self.parameters) != {"duration_days"}:
                 raise ValueError("Duration is required.")
+        elif self.action == "change_preferences":
+            interest_values = self.parameters.get("interests")
+            supported_interests = {
+                "history", "heritage", "spiritual", "mountains", "nature", "adventure",
+                "photography", "food", "wellness", "shopping", "nightlife", "beaches",
+            }
+            if "interests" in self.parameters:
+                if (
+                    not isinstance(interest_values, dict)
+                    or not interest_values
+                    or len(interest_values) > len(supported_interests)
+                    or any(
+                        key not in supported_interests
+                        or isinstance(value, bool)
+                        or not isinstance(value, (int, float))
+                        or not 0 <= value <= 1
+                        for key, value in interest_values.items()
+                    )
+                ):
+                    raise ValueError("Interest weights must use supported categories and values from 0 to 1.")
+            for key in ("walking_tolerance", "crowd_tolerance", "risk_tolerance"):
+                value = self.parameters.get(key)
+                if key in self.parameters and (
+                    isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 1
+                ):
+                    raise ValueError(f"{key} must be between 0 and 1.")
+            if "transportation_mode" in self.parameters and self.parameters["transportation_mode"] not in {"walk", "car", "mixed"}:
+                raise ValueError("Transportation mode must be walk, car, or mixed.")
+            if not self.requires_clarification and not self.parameters:
+                raise ValueError("At least one supported preference change is required.")
+        elif self.action == "change_attractions":
+            params = self.parameters
+            operation = params.get("operation")
+            categories = {
+                "history", "heritage", "spiritual", "mountains", "nature", "adventure",
+                "photography", "food", "wellness", "shopping", "nightlife", "beaches",
+            }
+            if operation is not None and operation not in {"add", "remove", "replace"}:
+                raise ValueError("Attraction operation must be add, remove, or replace.")
+            if "category" in params and params["category"] not in categories:
+                raise ValueError("Unsupported attraction category.")
+            for key in ("attraction_name", "target_name", "replacement_name"):
+                value = params.get(key)
+                if key in params and (not isinstance(value, str) or not value.strip() or len(value) > 150):
+                    raise ValueError(f"{key} must be a non-empty attraction name.")
+            if "count" in params and (
+                isinstance(params["count"], bool) or not isinstance(params["count"], int)
+                or not 1 <= params["count"] <= 3
+            ):
+                raise ValueError("At most three attractions can be requested at once.")
+            if "day_number" in params and (
+                isinstance(params["day_number"], bool) or not isinstance(params["day_number"], int)
+                or not 1 <= params["day_number"] <= 60
+            ):
+                raise ValueError("Invalid itinerary day number.")
+            if "position" in params and params["position"] != "last":
+                raise ValueError("Only the last itinerary stop can be targeted by position.")
+            if "criterion" in params and params["criterion"] not in {"nearby", "less_crowded"}:
+                raise ValueError("Unsupported replacement criterion.")
+            if self.requires_clarification:
+                pass
+            elif operation == "add":
+                if bool(params.get("attraction_name")) == bool(params.get("category")):
+                    raise ValueError("Adding attractions requires either a catalog name or category.")
+                if params.get("attraction_name") and params.get("count", 1) != 1:
+                    raise ValueError("A specific attraction request can add only one attraction.")
+                if any(key in params for key in ("target_name", "replacement_name", "position", "criterion")):
+                    raise ValueError("Unexpected target for an add operation.")
+            elif operation == "remove":
+                has_name = bool(params.get("target_name"))
+                has_last = params.get("position") == "last" and "day_number" in params
+                if has_name == has_last or any(key in params for key in ("attraction_name", "replacement_name", "category", "count", "criterion")):
+                    raise ValueError("Removing attractions requires one target name or a day and last position.")
+            elif operation == "replace":
+                has_target = bool(params.get("target_name"))
+                has_last = params.get("position") == "last" and "day_number" in params
+                if has_target == has_last or any(key in params for key in ("attraction_name", "count")):
+                    raise ValueError("Replacing attractions requires one target name or a day and last position.")
+                if params.get("replacement_name") and params.get("category"):
+                    raise ValueError("Choose a catalog replacement name or category, not both.")
+            else:
+                raise ValueError("Attraction operation is required.")
         if self.requires_clarification:
             if not self.clarification_question:
                 raise ValueError("Clarification requires a question.")

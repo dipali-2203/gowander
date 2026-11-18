@@ -6,7 +6,13 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from app.models import AssistantTripProposal, Trip
-from app.schemas import ConfirmedActivity, MultiDayItineraryResponse, MultiDayOptimizeRequest, Preferences
+from app.schemas import (
+    ConfirmedActivity, MultiDayItineraryResponse, MultiDayOptimizeRequest,
+    Preferences, TripPlanningOptions,
+)
+from app.services.assistant.attraction_management import (
+    AttractionChangeError, PreparedAttractionChange, prepare_attraction_change,
+)
 from app.services.assistant.schemas import AssistantIntentOutput
 
 
@@ -14,7 +20,7 @@ PACE_VALUES = {"relaxed": 0.25, "balanced": 0.5, "fast": 0.8}
 PROPOSAL_TTL = timedelta(days=7)
 
 
-def _trip_snapshot(trip: Trip, *, budget: float, preferences: dict) -> SimpleNamespace:
+def _trip_snapshot(trip: Trip, *, budget: float, preferences: dict, planning_options: dict) -> SimpleNamespace:
     """Planning/budget adapter. It never mutates the ORM trip instance."""
     return SimpleNamespace(
         id=trip.id,
@@ -28,7 +34,7 @@ def _trip_snapshot(trip: Trip, *, budget: float, preferences: dict) -> SimpleNam
         start_latitude=trip.start_latitude,
         start_longitude=trip.start_longitude,
         preferences=preferences,
-        planning_options=deepcopy(trip.planning_options or {}),
+        planning_options=deepcopy(planning_options),
         accommodation_selection=trip.accommodation_selection,
     )
 
@@ -109,6 +115,127 @@ def _budget_comparison(original: dict | None, proposed: dict | None) -> dict:
     }
 
 
+def _planned_location(result: dict, attraction_id: str) -> tuple[int, int] | None:
+    for day in result.get("days", []):
+        for stop in day.get("stops", []):
+            stop_id = stop.get("attraction_id") if isinstance(stop, dict) else stop.attraction_id
+            if str(stop_id) == attraction_id:
+                arrival = stop.get("arrival_minute") if isinstance(stop, dict) else stop.arrival_minute
+                return int(day["day_number"]), int(arrival)
+    return None
+
+
+def _completed_locations_preserved(trip: Trip, result: dict) -> bool:
+    original = {
+        str(stop.get("attraction_id")): (day.get("day_number"), stop.get("arrival_minute"))
+        for day in ((trip.latest_itinerary or {}).get("days") or [])
+        for stop in day.get("stops", [])
+    }
+    return all(
+        _planned_location(result, str(item)) == original.get(str(item))
+        for item in (trip.completed_attraction_ids or [])
+    )
+
+
+def _candidate_request(request: MultiDayOptimizeRequest, candidate) -> MultiDayOptimizeRequest:
+    attractions = [item for item in request.attractions if item.id != candidate.id]
+    attractions.append(candidate)
+    return request.model_copy(update={"attractions": attractions})
+
+
+def _find_plan_with_attraction(
+    *, trip: Trip, staged_trip, request: MultiDayOptimizeRequest,
+    candidate, required_day: int | None,
+) -> tuple[MultiDayOptimizeRequest, dict] | None:
+    from app.api.trips import _build_saved_multiday_plan
+
+    candidate_request = _candidate_request(request, candidate)
+    plan = _build_saved_multiday_plan(staged_trip, candidate_request)
+    location = _planned_location(plan, candidate.id)
+    if (
+        plan.get("feasible") and location is not None
+        and (required_day is None or location[0] == required_day)
+        and _completed_locations_preserved(trip, plan)
+    ):
+        return candidate_request, plan
+
+    day_count = (trip.end_date - trip.start_date).days + 1
+    days = [required_day] if required_day is not None else list(range(1, min(day_count, 14) + 1))
+    day_start = 540 if trip.available_minutes_per_day >= 540 else 0
+    first_minute = max(day_start, candidate.opening_minute)
+    last_minute = min(trip.available_minutes_per_day, candidate.closing_minute) - candidate.visit_minutes
+    if last_minute < first_minute:
+        return None
+    slots = list(dict.fromkeys((first_minute, min(first_minute + 60, last_minute), last_minute)))
+    for day_number in days:
+        for start_minute in slots:
+            confirmed = [
+                item for item in candidate_request.confirmed_activities
+                if item.attraction_id != candidate.id
+            ]
+            confirmed.append(ConfirmedActivity(
+                attraction_id=candidate.id, day_number=day_number, start_minute=start_minute,
+            ))
+            forced_request = candidate_request.model_copy(update={"confirmed_activities": confirmed})
+            plan = _build_saved_multiday_plan(staged_trip, forced_request)
+            location = _planned_location(plan, candidate.id)
+            if (
+                plan.get("feasible") and location == (day_number, start_minute)
+                and _completed_locations_preserved(trip, plan)
+            ):
+                return forced_request, plan
+    return None
+
+
+def _attraction_change(
+    prepared: PreparedAttractionChange, selected: list, result: dict,
+) -> tuple[list[dict], str]:
+    if prepared.operation == "remove":
+        target = prepared.target
+        return ([{
+            "field": "attraction_removed", "before": target.name, "after": "Removed",
+            "attraction_id": target.id, "day_number": prepared.target_day,
+            "category": target.catalog_category or target.category,
+            "cost_known": target.cost_known is True,
+            "fee": target.cost if target.cost_known is True else None,
+            "opening_hours": target.opening_hours,
+            "visit_duration_known": target.visit_duration_known is True,
+            "visit_minutes": target.visit_minutes if target.visit_duration_known is True else None,
+            "source_url": target.source_url,
+            "provider_name": target.provider_name,
+            "attribution": target.attribution,
+            "license_name": target.license_name,
+            "data_source": target.data_source,
+        }], f"Remove {target.name} from Day {prepared.target_day}")
+
+    records = []
+    for candidate in selected:
+        location = _planned_location(result, candidate.id)
+        day_number = location[0] if location else prepared.requested_day
+        field = "attraction_replaced" if prepared.operation == "replace" else "attraction_added"
+        before = prepared.target.name if prepared.operation == "replace" else "Not in itinerary"
+        records.append({
+            "field": field, "before": before, "after": candidate.name,
+            "attraction_id": candidate.id, "day_number": day_number,
+            "category": candidate.catalog_category or candidate.category,
+            "cost_known": candidate.cost_known is True,
+            "fee": candidate.cost if candidate.cost_known is True else None,
+            "opening_hours": candidate.opening_hours,
+            "visit_duration_known": candidate.visit_duration_known is True,
+            "visit_minutes": candidate.visit_minutes if candidate.visit_duration_known is True else None,
+            "source_url": candidate.source_url,
+            "provider_name": candidate.provider_name,
+            "attribution": candidate.attribution,
+            "license_name": candidate.license_name,
+            "data_source": candidate.data_source,
+        })
+    if prepared.operation == "replace":
+        summary = f"Replace {prepared.target.name} with {', '.join(item.name for item in selected)}"
+    else:
+        summary = f"Add {', '.join(item.name for item in selected)}"
+    return records, f"{summary} to your itinerary"
+
+
 def create_trip_proposal(
     *,
     db,
@@ -127,8 +254,17 @@ def create_trip_proposal(
     except Exception:
         return None, "The saved planning inputs are incomplete, so I could not safely create a proposal. Please regenerate the itinerary from the planner first."
 
+    attraction_change = None
+    if intent.action == "change_attractions":
+        try:
+            attraction_change = prepare_attraction_change(db, trip, original_request, intent)
+        except AttractionChangeError as exc:
+            return None, str(exc)
+        original_request = attraction_change.request
+
     proposed_budget = float(trip.budget)
     proposed_preferences = deepcopy(trip.preferences or {})
+    proposed_planning_options = deepcopy(trip.planning_options or {})
     if intent.action == "change_travel_pace":
         if _pace_label(trip.preferences).casefold() == intent.parameters["pace"]:
             return None, f"Your saved trip is already set to a {intent.parameters['pace']} pace. No changes were made."
@@ -153,6 +289,50 @@ def create_trip_proposal(
         proposal_type = "budget_change"
         changes = [{"field": "budget_inr", "before": trip.budget, "after": proposed_budget}]
         summary = f"Update the budget for your {trip.destination} trip to ₹{proposed_budget:,.0f}"
+    elif intent.action == "change_preferences":
+        parameters = intent.parameters
+        changes = []
+        if "interests" in parameters:
+            current_interests = deepcopy(proposed_preferences.get("interests") or {})
+            for key, value in sorted(parameters["interests"].items()):
+                before = current_interests.get(key)
+                if before is not None and float(before) == float(value):
+                    continue
+                current_interests[key] = float(value)
+                changes.append({
+                    "field": f"interest_{key}",
+                    "before": float(before) if before is not None else "Not set",
+                    "after": float(value),
+                })
+            proposed_preferences["interests"] = current_interests
+        for key in ("walking_tolerance", "crowd_tolerance", "risk_tolerance"):
+            if key not in parameters:
+                continue
+            before = float(proposed_preferences.get(key, Preferences().model_dump()[key]))
+            after = float(parameters[key])
+            if before == after:
+                continue
+            proposed_preferences[key] = after
+            changes.append({"field": key, "before": before, "after": after})
+        if "transportation_mode" in parameters:
+            before = proposed_planning_options.get("transportation_mode", "mixed")
+            after = parameters["transportation_mode"]
+            if before != after:
+                proposed_planning_options["transportation_mode"] = after
+                changes.append({"field": "transportation_mode", "before": str(before), "after": str(after)})
+        if not changes:
+            return None, "Those preferences already match your saved trip. No changes were made."
+        try:
+            proposed_preferences = Preferences.model_validate(proposed_preferences).model_dump(mode="json")
+            proposed_planning_options = TripPlanningOptions.model_validate(proposed_planning_options).model_dump(mode="json")
+        except Exception:
+            return None, "I could not validate those preference values against the current planner. Your saved trip remains unchanged."
+        proposal_type = "preference_change"
+        summary = f"Update preferences for your {trip.destination} trip"
+    elif intent.action == "change_attractions":
+        proposal_type = "attraction_change"
+        changes = []
+        summary = f"Update attractions for your {trip.destination} trip"
     else:
         return None, "Changing trip duration is not supported yet. Shortening a trip can strand completed activities, and the current planner does not safely preserve them across changed trip dates. Your saved trip remains unchanged."
 
@@ -162,14 +342,54 @@ def create_trip_proposal(
     request_data = original_request.model_dump(mode="python")
     request_data["confirmed_activities"] = [item.model_dump(mode="python") for item in confirmed]
     proposed_request = MultiDayOptimizeRequest.model_validate(request_data)
-    staged_trip = _trip_snapshot(trip, budget=proposed_budget, preferences=proposed_preferences)
+    staged_trip = _trip_snapshot(
+        trip, budget=proposed_budget, preferences=proposed_preferences,
+        planning_options=proposed_planning_options,
+    )
+    planner_request = proposed_request
+    if attraction_change is not None:
+        planner_request = attraction_change.planning_request.model_copy(update={
+            "confirmed_activities": proposed_request.confirmed_activities,
+        })
 
     # The saved-trip planner calculates the same deterministic result used by the
     # regenerate endpoint, but this call performs no ORM writes or commits.
     from app.api.trips import _build_saved_multiday_plan
 
+    selected_attractions = []
     try:
-        result = _build_saved_multiday_plan(staged_trip, proposed_request)
+        if attraction_change is not None and attraction_change.candidate_groups:
+            working_request = planner_request
+            result = None
+            for group in attraction_change.candidate_groups:
+                selected = None
+                for candidate in group:
+                    if candidate.id in {item.id for item in selected_attractions}:
+                        continue
+                    planned = _find_plan_with_attraction(
+                        trip=trip, staged_trip=staged_trip, request=working_request,
+                        candidate=candidate, required_day=attraction_change.requested_day,
+                    )
+                    if planned is not None:
+                        working_request, result = planned
+                        selected = candidate
+                        selected_attractions.append(candidate)
+                        proposed_request = _candidate_request(proposed_request, candidate)
+                        break
+                if selected is None:
+                    subject = attraction_change.target.name if attraction_change.target else "the requested attraction"
+                    return None, (
+                        f"I couldn't place {subject} within the saved itinerary's time, budget, and completed-activity constraints. "
+                        "Your trip remains unchanged."
+                    )
+            proposed_request = proposed_request.model_copy(update={
+                "confirmed_activities": working_request.confirmed_activities,
+            })
+            changes, summary = _attraction_change(attraction_change, selected_attractions, result)
+        else:
+            result = _build_saved_multiday_plan(staged_trip, planner_request)
+            if attraction_change is not None:
+                changes, summary = _attraction_change(attraction_change, [], result)
         proposed_itinerary = MultiDayItineraryResponse(
             trip_id=trip.id,
             algorithm="greedy_multiday",
@@ -213,6 +433,7 @@ def create_trip_proposal(
     proposed_inputs = {
         "budget": proposed_budget,
         "preferences": proposed_preferences,
+        "planning_options": proposed_planning_options,
         "planning_inputs": proposed_request.model_dump(mode="json"),
     }
     payload = {

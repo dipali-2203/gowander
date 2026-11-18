@@ -214,7 +214,24 @@ export type AssistantTripProposal = {
   status: "pending" | "accepted" | "rejected" | "expired" | "stale";
   base_revision: number;
   summary: string;
-  changes: Array<{ field: string; before: string | number; after: string | number }>;
+  changes: Array<{
+    field: string;
+    before: string | number;
+    after: string | number;
+    attraction_id?: string;
+    day_number?: number;
+    category?: string;
+    cost_known?: boolean;
+    fee?: number | null;
+    opening_hours?: string | null;
+    visit_duration_known?: boolean;
+    visit_minutes?: number | null;
+    source_url?: string | null;
+    provider_name?: string | null;
+    attribution?: string | null;
+    license_name?: string | null;
+    data_source?: string | null;
+  }>;
   itinerary_comparison: {
     added_stops: Array<{ attraction_id: string; name: string; day_number: number }>;
     removed_stops: Array<{ attraction_id: string; name: string; day_number: number }>;

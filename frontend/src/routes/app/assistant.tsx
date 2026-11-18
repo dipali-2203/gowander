@@ -484,10 +484,37 @@ function AssistantProposalCard({
     expired: "Expired",
     stale: "Out of date · create a new proposal",
   };
-  const changeLabel = (field: string) =>
-    field === "travel_pace" ? "Travel pace" : field === "budget_inr" ? "Trip budget" : field;
-  const changeValue = (field: string, value: string | number) =>
-    field === "budget_inr" && typeof value === "number" ? money(value) : String(value);
+  const changeLabel = (field: string) => {
+    const interest = field.startsWith("interest_") ? field.slice("interest_".length) : null;
+    const labels: Record<string, string> = {
+      walking_tolerance: "Walking tolerance",
+      crowd_tolerance: "Crowd tolerance",
+      risk_tolerance: "Risk tolerance",
+      transportation_mode: "Transportation mode",
+      attraction_added: "Attraction added",
+      attraction_removed: "Attraction removed",
+      attraction_replaced: "Attraction replaced",
+    };
+    if (interest) {
+      return `${interest.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase())} interest weight`;
+    }
+    return field === "travel_pace"
+      ? "Travel pace"
+      : field === "budget_inr"
+        ? "Trip budget"
+        : (labels[field] ?? field);
+  };
+  const changeValue = (field: string, value: string | number) => {
+    if (field === "budget_inr" && typeof value === "number") return money(value);
+    if (
+      (field.startsWith("interest_") ||
+        ["walking_tolerance", "crowd_tolerance", "risk_tolerance"].includes(field)) &&
+      typeof value === "number"
+    ) {
+      return `${Math.round(value * 100)}%`;
+    }
+    return String(value);
+  };
 
   return (
     <section
@@ -509,9 +536,48 @@ function AssistantProposalCard({
       {proposal.changes.length > 0 && (
         <ul className="mt-3 space-y-1 text-sm">
           {proposal.changes.map((change) => (
-            <li key={change.field}>
-              {changeLabel(change.field)}: {changeValue(change.field, change.before)} →{" "}
-              {changeValue(change.field, change.after)}
+            <li key={`${change.field}-${change.attraction_id ?? "preference"}`}>
+              <span>
+                {changeLabel(change.field)}: {changeValue(change.field, change.before)} →{" "}
+                {changeValue(change.field, change.after)}
+              </span>
+              {change.attraction_id && (
+                <p className="ml-3 mt-1 text-xs text-muted-foreground">
+                  {change.day_number ? `Day ${change.day_number}` : "Day not assigned"}
+                  {change.category ? ` · ${change.category}` : ""}
+                  {" · Entry fee: "}
+                  {change.cost_known && typeof change.fee === "number"
+                    ? money(change.fee)
+                    : "Unavailable"}
+                  {" · Visit duration: "}
+                  {change.visit_duration_known && typeof change.visit_minutes === "number"
+                    ? `${change.visit_minutes} min`
+                    : "Unavailable"}
+                  {" · Opening hours: "}
+                  {change.opening_hours || "Unavailable"}
+                  {(change.provider_name || change.data_source) && (
+                    <>
+                      {" · Source: "}
+                      {change.provider_name || change.data_source}
+                    </>
+                  )}
+                  {change.attribution && ` · ${change.attribution}`}
+                  {change.license_name && ` · ${change.license_name}`}
+                  {change.source_url && /^https?:\/\//i.test(change.source_url) && (
+                    <>
+                      {" · "}
+                      <a
+                        href={change.source_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline"
+                      >
+                        Source
+                      </a>
+                    </>
+                  )}
+                </p>
+              )}
             </li>
           ))}
         </ul>

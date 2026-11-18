@@ -82,7 +82,7 @@ def create_trip(client: TestClient):
     return response.json()["id"]
 
 
-def create_plannable_trip(client: TestClient, email="proposal@example.com"):
+def create_plannable_trip(client: TestClient, email="proposal@example.com", attractions=None):
     signup(client, email)
     trip_id = create_trip(client)
     changed = client.put(f"/api/v1/trips/{trip_id}", headers={"Origin": ORIGIN}, json={"available_minutes_per_day": 1140})
@@ -91,7 +91,7 @@ def create_plannable_trip(client: TestClient, email="proposal@example.com"):
         f"/api/v1/trips/{trip_id}/optimize-multiday",
         headers={"Origin": ORIGIN},
         json={
-            "attractions": [{
+            "attractions": attractions or [{
                 "id": "museum", "name": "City Museum", "category": "museum",
                 "latitude": 26.92, "longitude": 75.82, "cost": 200,
                 "visit_minutes": 60, "preference_score": 0.9,
@@ -103,6 +103,15 @@ def create_plannable_trip(client: TestClient, email="proposal@example.com"):
     )
     assert response.status_code == 200, response.text
     return trip_id
+
+
+def create_catalog_attraction(client: TestClient, *, id: str, name: str, category: str, latitude=26.92, longitude=75.82):
+    response = client.post("/api/v1/attractions", headers={"Origin": ORIGIN}, json={
+        "id": id, "name": name, "destination": "Jaipur", "category": category,
+        "latitude": latitude, "longitude": longitude, "data_source": "osm",
+    })
+    assert response.status_code == 201, response.text
+    return response.json()
 
 
 def mock_intent(monkeypatch, value):
@@ -558,6 +567,497 @@ def test_structured_intent_accepts_allowlisted_shapes(payload):
 def test_structured_intent_rejects_invalid_or_unexpected_parameters(payload):
     with pytest.raises(Exception):
         AssistantIntentOutput.model_validate(payload)
+
+
+@pytest.mark.parametrize("payload", [
+    {
+        "intent": "modify_trip", "action": "change_preferences",
+        "parameters": {"interests": {"history": 0.95, "food": 0.8}, "walking_tolerance": 0.2},
+        "response": "I can prepare a preference proposal.",
+    },
+    {
+        "intent": "modify_trip", "action": "change_preferences",
+        "parameters": {"crowd_tolerance": 0.2, "risk_tolerance": 0.8, "transportation_mode": "car"},
+        "response": "I can prepare a preference proposal.",
+    },
+    {
+        "intent": "modify_trip", "action": "change_preferences", "parameters": {},
+        "requires_clarification": True, "clarification_question": "Which preference should I change?",
+        "response": "Please clarify.",
+    },
+])
+def test_structured_intent_accepts_supported_preference_changes(payload):
+    assert AssistantIntentOutput.model_validate(payload)
+
+
+@pytest.mark.parametrize("parameters", [
+    {"interests": {"shopping": 1.2}},
+    {"interests": {"unsupported_interest": 0.8}},
+    {"walking_tolerance": True},
+    {"crowd_tolerance": -0.1},
+    {"transportation_mode": "bicycle"},
+    {"risk_tolerance": 0.5, "budget": 50000},
+])
+def test_structured_intent_rejects_invalid_preference_changes(parameters):
+    with pytest.raises(Exception):
+        AssistantIntentOutput.model_validate({
+            "intent": "modify_trip", "action": "change_preferences",
+            "parameters": parameters, "response": "I can prepare a proposal.",
+        })
+
+
+@pytest.mark.parametrize("parameters", [
+    {"operation": "add", "attraction_name": "Hawa Mahal"},
+    {"operation": "add", "category": "spiritual", "count": 2, "day_number": 1},
+    {"operation": "remove", "target_name": "City Museum", "day_number": 2},
+    {"operation": "remove", "position": "last", "day_number": 3},
+    {"operation": "replace", "target_name": "Museum", "criterion": "nearby"},
+    {"operation": "replace", "target_name": "Museum", "category": "adventure"},
+    {"operation": "replace", "target_name": "Museum", "replacement_name": "Jal Mahal"},
+    {"operation": "replace", "target_name": "Museum", "criterion": "less_crowded"},
+])
+def test_structured_intent_accepts_allowlisted_attraction_changes(parameters):
+    payload = {
+        "intent": "modify_trip", "action": "change_attractions", "parameters": parameters,
+        "requires_clarification": False, "clarification_question": None,
+        "response": "I can prepare an itinerary proposal.",
+    }
+    assert AssistantIntentOutput.model_validate(payload)
+
+
+@pytest.mark.parametrize("parameters", [
+    {"operation": "add", "attraction_name": "Hawa Mahal", "category": "spiritual"},
+    {"operation": "add", "category": "invented", "count": 1},
+    {"operation": "add", "category": "food", "count": 4},
+    {"operation": "remove", "target_name": "Museum", "position": "last", "day_number": 2},
+    {"operation": "replace", "target_name": "Museum", "replacement_name": "Other", "category": "food"},
+    {"operation": "remove", "target_name": "Museum", "sql": "DELETE"},
+])
+def test_structured_intent_rejects_invalid_attraction_changes(parameters):
+    with pytest.raises(Exception):
+        AssistantIntentOutput.model_validate({
+            "intent": "modify_trip", "action": "change_attractions", "parameters": parameters,
+            "response": "I can prepare a proposal.",
+        })
+
+
+def preference_intent(parameters):
+    return {
+        "intent": "modify_trip", "action": "change_preferences", "parameters": parameters,
+        "requires_clarification": False, "clarification_question": None,
+        "response": "I can prepare a preference proposal.",
+    }
+
+
+def attraction_change_intent(parameters):
+    return {
+        "intent": "modify_trip", "action": "change_attractions", "parameters": parameters,
+        "requires_clarification": False, "clarification_question": None,
+        "response": "I can prepare an attraction proposal.",
+    }
+
+
+def two_stop_inputs(second_id="park", second_name="City Park", second_category="park"):
+    return [
+        {
+            "id": "museum", "name": "City Museum", "category": "museum",
+            "latitude": 26.92, "longitude": 75.82, "cost": 200,
+            "visit_minutes": 60, "preference_score": 0.9,
+            "opening_minute": 540, "closing_minute": 1080,
+        },
+        {
+            "id": second_id, "name": second_name, "category": second_category,
+            "latitude": 26.921, "longitude": 75.821, "cost": 100,
+            "visit_minutes": 45, "preference_score": 0.8,
+            "opening_minute": 540, "closing_minute": 1080,
+        },
+    ]
+
+
+def test_preference_proposal_is_reviewable_rejectable_and_idempotent(client, monkeypatch):
+    trip_id = create_plannable_trip(client, "preference-reject@example.com")
+    before = client.get(f"/api/v1/trips/{trip_id}").json()
+    mock_intent(monkeypatch, preference_intent({
+        "interests": {"history": 0.95, "food": 0.8}, "walking_tolerance": 0.2,
+        "crowd_tolerance": 0.15,
+    }))
+    request = {
+        "trip_id": trip_id,
+        "request_id": "568a7c13-4266-4e06-a7d6-65bb7454d124",
+        "message": "Focus more on history and food and reduce walking; avoid crowds.",
+        "conversation_history": [],
+    }
+    response = client.post("/api/v1/assistant/chat", headers={"Origin": ORIGIN}, json=request)
+    assert response.status_code == 200, response.text
+    proposal = response.json()["proposal"]
+    assert proposal["status"] == "pending"
+    assert {change["field"] for change in proposal["changes"]} == {
+        "interest_history", "interest_food", "walking_tolerance", "crowd_tolerance",
+    }
+    assert client.get(f"/api/v1/trips/{trip_id}").json()["preferences"] == before["preferences"]
+
+    replay = client.post("/api/v1/assistant/chat", headers={"Origin": ORIGIN}, json=request)
+    assert replay.status_code == 200
+    assert replay.json()["proposal"]["proposal_id"] == proposal["proposal_id"]
+
+    rejected = client.post(
+        f"/api/v1/assistant/proposals/{proposal['proposal_id']}/reject", headers={"Origin": ORIGIN},
+    )
+    assert rejected.status_code == 200
+    after = client.get(f"/api/v1/trips/{trip_id}").json()
+    assert after["preferences"] == before["preferences"]
+    assert after["latest_itinerary"] == before["latest_itinerary"]
+    assert rejected.json()["proposal"]["status"] == "rejected"
+
+
+def test_preference_proposal_accepts_supported_fields_and_preserves_completed(client, monkeypatch):
+    trip_id = create_plannable_trip(client, "preference-accept@example.com")
+    before = client.get(f"/api/v1/trips/{trip_id}").json()
+    completed = client.put(
+        f"/api/v1/trips/{trip_id}/completed-activities", headers={"Origin": ORIGIN},
+        json={"completed_attraction_ids": ["museum"], "itinerary_revision": before["itinerary_revision"]},
+    )
+    assert completed.status_code == 200
+    before = client.get(f"/api/v1/trips/{trip_id}").json()
+    mock_intent(monkeypatch, preference_intent({
+        "interests": {"history": 0.95, "heritage": 0.9},
+        "walking_tolerance": 0.2,
+        "crowd_tolerance": 0.15,
+        "risk_tolerance": 0.8,
+    }))
+    response = client.post("/api/v1/assistant/chat", headers={"Origin": ORIGIN}, json={
+        "trip_id": trip_id, "message": "Prioritize history, less walking, and avoid crowds.",
+        "conversation_history": [],
+    })
+    assert response.status_code == 200, response.text
+    proposal = response.json()["proposal"]
+    assert proposal["type"] == "preference_change"
+    pending = client.get(f"/api/v1/trips/{trip_id}").json()
+    assert pending["preferences"] == before["preferences"]
+    assert pending["planning_options"] == before["planning_options"]
+    assert proposal["validation"]["valid"] is True, proposal["validation"]["issues"]
+
+    accepted = client.post(
+        f"/api/v1/assistant/proposals/{proposal['proposal_id']}/accept", headers={"Origin": ORIGIN},
+    )
+    assert accepted.status_code == 200, accepted.text
+    saved = client.get(f"/api/v1/trips/{trip_id}").json()
+    assert saved["preferences"]["interests"]["history"] == 0.95
+    assert saved["preferences"]["walking_tolerance"] == 0.2
+    assert saved["preferences"]["crowd_tolerance"] == 0.15
+    assert saved["preferences"]["risk_tolerance"] == 0.8
+    assert saved["completed_attraction_ids"] == ["museum"]
+    completed_stop = next(
+        (day["day_number"], stop["arrival_minute"])
+        for day in saved["latest_itinerary"]["days"] for stop in day["stops"]
+        if stop["attraction_id"] == "museum"
+    )
+    original_stop = next(
+        (day["day_number"], stop["arrival_minute"])
+        for day in before["latest_itinerary"]["days"] for stop in day["stops"]
+        if stop["attraction_id"] == "museum"
+    )
+    assert completed_stop == original_stop
+    assert saved["itinerary_history"][-1]["itinerary"] == before["latest_itinerary"]
+
+
+def test_transport_preference_proposal_uses_existing_planner_mode(client, monkeypatch):
+    trip_id = create_plannable_trip(client, "preference-transport@example.com")
+    before = client.get(f"/api/v1/trips/{trip_id}").json()
+    mock_intent(monkeypatch, preference_intent({"transportation_mode": "walk"}))
+    response = client.post("/api/v1/assistant/chat", headers={"Origin": ORIGIN}, json={
+        "trip_id": trip_id, "message": "Use walking as my transport mode.", "conversation_history": [],
+    })
+    assert response.status_code == 200, response.text
+    proposal = response.json()["proposal"]
+    assert proposal["validation"]["valid"] is True, proposal["validation"]["issues"]
+    assert client.get(f"/api/v1/trips/{trip_id}").json()["planning_options"] == before["planning_options"]
+    accepted = client.post(
+        f"/api/v1/assistant/proposals/{proposal['proposal_id']}/accept", headers={"Origin": ORIGIN},
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert client.get(f"/api/v1/trips/{trip_id}").json()["planning_options"]["transportation_mode"] == "walk"
+
+
+def test_unsupported_preference_intent_creates_no_proposal(client, monkeypatch):
+    trip_id = create_plannable_trip(client, "preference-unsupported@example.com")
+    mock_intent(monkeypatch, {
+        "intent": "unsupported", "action": None, "parameters": {},
+        "requires_clarification": False, "clarification_question": None,
+        "response": "That preference is not supported yet.",
+    })
+    response = client.post("/api/v1/assistant/chat", headers={"Origin": ORIGIN}, json={
+        "trip_id": trip_id, "message": "Make the trip focus on an unsupported dimension.",
+        "conversation_history": [],
+    })
+    assert response.status_code == 200
+    assert response.json()["proposal"] is None
+
+
+def test_specific_catalog_attraction_is_proposed_without_mutation_and_accept_preserves_completed(client, monkeypatch):
+    trip_id = create_plannable_trip(client, "specific-attraction@example.com")
+    create_catalog_attraction(client, id="osm-node-101", name="Hawa Mahal", category="historical")
+    before = client.get(f"/api/v1/trips/{trip_id}").json()
+    completed = client.put(
+        f"/api/v1/trips/{trip_id}/completed-activities", headers={"Origin": ORIGIN},
+        json={"completed_attraction_ids": ["museum"], "itinerary_revision": before["itinerary_revision"]},
+    )
+    assert completed.status_code == 200
+    before = client.get(f"/api/v1/trips/{trip_id}").json()
+    mock_intent(monkeypatch, attraction_change_intent({
+        "operation": "add", "attraction_name": "Hawa Mahal",
+    }))
+    request = {
+        "trip_id": trip_id,
+        "request_id": "66b66ed7-aad0-492e-9584-eb63edf685d1",
+        "message": "Include Hawa Mahal.", "conversation_history": [],
+    }
+    response = client.post("/api/v1/assistant/chat", headers={"Origin": ORIGIN}, json=request)
+    assert response.status_code == 200, response.text
+    proposal = response.json()["proposal"]
+    assert proposal["type"] == "attraction_change"
+    assert proposal["validation"]["valid"] is True, proposal["validation"]["issues"]
+    detail = next(change for change in proposal["changes"] if change["field"] == "attraction_added")
+    assert detail["after"] == "Hawa Mahal"
+    assert detail["cost_known"] is False
+    assert detail["fee"] is None
+    assert detail["day_number"] in {1, 2, 3}
+    assert any("fees are unknown" in warning for warning in proposal["warnings"])
+    assert client.get(f"/api/v1/trips/{trip_id}").json()["latest_itinerary"] == before["latest_itinerary"]
+    replay = client.post("/api/v1/assistant/chat", headers={"Origin": ORIGIN}, json=request)
+    assert replay.status_code == 200
+    assert replay.json()["proposal"]["proposal_id"] == proposal["proposal_id"]
+
+    accepted = client.post(
+        f"/api/v1/assistant/proposals/{proposal['proposal_id']}/accept", headers={"Origin": ORIGIN},
+    )
+    assert accepted.status_code == 200, accepted.text
+    saved = client.get(f"/api/v1/trips/{trip_id}").json()
+    assert "osm-node-101" in {
+        stop["attraction_id"] for day in saved["latest_itinerary"]["days"] for stop in day["stops"]
+    }
+    assert saved["completed_attraction_ids"] == ["museum"]
+    original_completed = next(
+        (day["day_number"], stop["arrival_minute"])
+        for day in before["latest_itinerary"]["days"] for stop in day["stops"]
+        if stop["attraction_id"] == "museum"
+    )
+    accepted_completed = next(
+        (day["day_number"], stop["arrival_minute"])
+        for day in saved["latest_itinerary"]["days"] for stop in day["stops"]
+        if stop["attraction_id"] == "museum"
+    )
+    assert accepted_completed == original_completed
+    assert any(item["id"] == "osm-node-101" for item in saved["planning_inputs"]["attractions"])
+
+
+def test_category_addition_selects_catalog_records_and_prevents_current_duplicates(client, monkeypatch):
+    trip_id = create_plannable_trip(client, "category-attraction@example.com")
+    create_catalog_attraction(client, id="temple-one", name="Birla Temple", category="religious")
+    create_catalog_attraction(client, id="temple-two", name="Govind Devji Temple", category="religious", latitude=26.923)
+    mock_intent(monkeypatch, attraction_change_intent({
+        "operation": "add", "category": "spiritual", "count": 2, "day_number": 1,
+    }))
+    response = client.post("/api/v1/assistant/chat", headers={"Origin": ORIGIN}, json={
+        "trip_id": trip_id, "message": "Add two spiritual attractions.", "conversation_history": [],
+    })
+    assert response.status_code == 200, response.text
+    proposal = response.json()["proposal"]
+    assert proposal is not None
+    added_ids = {change["attraction_id"] for change in proposal["changes"]}
+    assert added_ids == {"temple-one", "temple-two"}
+    assert all(change["day_number"] == 1 for change in proposal["changes"])
+    assert all(change["cost_known"] is False and change["fee"] is None for change in proposal["changes"])
+
+    # Once one named catalog attraction is already scheduled, another add request
+    # for it produces no proposal instead of creating a duplicate stop.
+    accepted = client.post(
+        f"/api/v1/assistant/proposals/{proposal['proposal_id']}/accept", headers={"Origin": ORIGIN},
+    )
+    assert accepted.status_code == 200, accepted.text
+    mock_intent(monkeypatch, attraction_change_intent({
+        "operation": "add", "attraction_name": "Birla Temple",
+    }))
+    duplicate = client.post("/api/v1/assistant/chat", headers={"Origin": ORIGIN}, json={
+        "trip_id": trip_id, "message": "Add Birla Temple.", "conversation_history": [],
+    })
+    assert duplicate.status_code == 200
+    assert duplicate.json()["proposal"] is None
+    assert "already" in duplicate.json()["response"].lower()
+
+
+def test_missing_and_ambiguous_catalog_names_do_not_create_proposals(client, monkeypatch):
+    trip_id = create_plannable_trip(client, "catalog-name-resolution@example.com")
+    create_catalog_attraction(client, id="palace-one", name="City Palace East", category="historical")
+    create_catalog_attraction(client, id="palace-two", name="City Palace West", category="historical", latitude=26.925)
+    mock_intent(monkeypatch, attraction_change_intent({
+        "operation": "add", "attraction_name": "Unknown Palace",
+    }))
+    missing = client.post("/api/v1/assistant/chat", headers={"Origin": ORIGIN}, json={
+        "trip_id": trip_id, "message": "Add Unknown Palace.", "conversation_history": [],
+    })
+    assert missing.status_code == 200
+    assert missing.json()["proposal"] is None
+    assert "couldn't find" in missing.json()["response"].lower()
+
+    mock_intent(monkeypatch, attraction_change_intent({
+        "operation": "add", "attraction_name": "City Palace",
+    }))
+    ambiguous = client.post("/api/v1/assistant/chat", headers={"Origin": ORIGIN}, json={
+        "trip_id": trip_id, "message": "Add City Palace.", "conversation_history": [],
+    })
+    assert ambiguous.status_code == 200
+    assert ambiguous.json()["proposal"] is None
+    assert "more than one" in ambiguous.json()["response"].lower()
+
+
+def test_remove_target_is_day_scoped_and_completed_attractions_are_protected(client, monkeypatch):
+    trip_id = create_plannable_trip(
+        client, "remove-attraction@example.com", attractions=two_stop_inputs(),
+    )
+    before = client.get(f"/api/v1/trips/{trip_id}").json()
+    museum_day = next(
+        day["day_number"] for day in before["latest_itinerary"]["days"]
+        if any(stop["attraction_id"] == "museum" for stop in day["stops"])
+    )
+    completed = client.put(
+        f"/api/v1/trips/{trip_id}/completed-activities", headers={"Origin": ORIGIN},
+        json={"completed_attraction_ids": ["museum"], "itinerary_revision": before["itinerary_revision"]},
+    )
+    assert completed.status_code == 200
+    mock_intent(monkeypatch, attraction_change_intent({
+        "operation": "remove", "target_name": "City Museum", "day_number": museum_day,
+    }))
+    response = client.post("/api/v1/assistant/chat", headers={"Origin": ORIGIN}, json={
+        "trip_id": trip_id, "message": f"Remove City Museum from Day {museum_day}.",
+        "conversation_history": [],
+    })
+    assert response.status_code == 200
+    assert response.json()["proposal"] is None
+    assert "completed" in response.json()["response"].lower()
+
+
+def test_remove_attraction_proposal_rejection_and_ambiguous_target(client, monkeypatch):
+    trip_id = create_plannable_trip(
+        client, "remove-review@example.com", attractions=two_stop_inputs(),
+    )
+    before = client.get(f"/api/v1/trips/{trip_id}").json()
+    museum_day = next(
+        day["day_number"] for day in before["latest_itinerary"]["days"]
+        if any(stop["attraction_id"] == "museum" for stop in day["stops"])
+    )
+    mock_intent(monkeypatch, attraction_change_intent({
+        "operation": "remove", "target_name": "City Museum", "day_number": museum_day,
+    }))
+    response = client.post("/api/v1/assistant/chat", headers={"Origin": ORIGIN}, json={
+        "trip_id": trip_id, "message": f"Remove City Museum from Day {museum_day}.",
+        "conversation_history": [],
+    })
+    assert response.status_code == 200
+    proposal = response.json()["proposal"]
+    assert proposal["validation"]["valid"] is True, proposal["validation"]["issues"]
+    assert any(change["field"] == "attraction_removed" for change in proposal["changes"])
+    assert any(stop["attraction_id"] == "museum" for day in client.get(f"/api/v1/trips/{trip_id}").json()["latest_itinerary"]["days"] for stop in day["stops"])
+    rejected = client.post(
+        f"/api/v1/assistant/proposals/{proposal['proposal_id']}/reject", headers={"Origin": ORIGIN},
+    )
+    assert rejected.status_code == 200
+    assert client.get(f"/api/v1/trips/{trip_id}").json()["latest_itinerary"] == before["latest_itinerary"]
+
+    ambiguous_trip = create_plannable_trip(
+        client, "remove-ambiguous@example.com",
+        attractions=two_stop_inputs(second_id="museum-two", second_name="Art Museum", second_category="museum"),
+    )
+    ambiguous_plan = client.get(f"/api/v1/trips/{ambiguous_trip}").json()["latest_itinerary"]
+    assert sum("museum" in stop["name"].lower() for day in ambiguous_plan["days"] for stop in day["stops"]) == 2
+    mock_intent(monkeypatch, attraction_change_intent({"operation": "remove", "target_name": "Museum"}))
+    ambiguous = client.post("/api/v1/assistant/chat", headers={"Origin": ORIGIN}, json={
+        "trip_id": ambiguous_trip, "message": "Remove the museum.", "conversation_history": [],
+    })
+    assert ambiguous.status_code == 200
+    assert ambiguous.json()["proposal"] is None
+    assert "more than one" in ambiguous.json()["response"].lower()
+
+
+def test_replacement_uses_catalog_and_stale_proposal_cannot_be_accepted(client, monkeypatch):
+    trip_id = create_plannable_trip(
+        client, "replace-attraction@example.com", attractions=two_stop_inputs(),
+    )
+    create_catalog_attraction(client, id="jal-mahal", name="Jal Mahal", category="viewpoint", latitude=26.953)
+    before = client.get(f"/api/v1/trips/{trip_id}").json()
+    museum_day = next(
+        day["day_number"] for day in before["latest_itinerary"]["days"]
+        if any(stop["attraction_id"] == "museum" for stop in day["stops"])
+    )
+    mock_intent(monkeypatch, attraction_change_intent({
+        "operation": "replace", "target_name": "City Museum", "replacement_name": "Jal Mahal",
+    }))
+    response = client.post("/api/v1/assistant/chat", headers={"Origin": ORIGIN}, json={
+        "trip_id": trip_id, "message": "Replace City Museum with Jal Mahal.", "conversation_history": [],
+    })
+    assert response.status_code == 200
+    proposal = response.json()["proposal"]
+    assert proposal["validation"]["valid"] is True, proposal["validation"]["issues"]
+    replacement = next(change for change in proposal["changes"] if change["field"] == "attraction_replaced")
+    assert replacement["before"] == "City Museum"
+    assert replacement["after"] == "Jal Mahal"
+    assert replacement["day_number"] == museum_day
+
+    changed = client.put(f"/api/v1/trips/{trip_id}", headers={"Origin": ORIGIN}, json={"budget": 14000})
+    assert changed.status_code == 200
+    stale = client.post(
+        f"/api/v1/assistant/proposals/{proposal['proposal_id']}/accept", headers={"Origin": ORIGIN},
+    )
+    assert stale.status_code == 409
+    refreshed = client.get(f"/api/v1/assistant/proposals/{proposal['proposal_id']}", headers={"Origin": ORIGIN})
+    assert refreshed.json()["status"] == "stale"
+
+
+def test_replacement_without_known_less_crowded_candidate_and_completed_target_are_rejected(client, monkeypatch):
+    trip_id = create_plannable_trip(
+        client, "replacement-limits@example.com", attractions=two_stop_inputs(),
+    )
+    before = client.get(f"/api/v1/trips/{trip_id}").json()
+    completed = client.put(
+        f"/api/v1/trips/{trip_id}/completed-activities", headers={"Origin": ORIGIN},
+        json={"completed_attraction_ids": ["museum"], "itinerary_revision": before["itinerary_revision"]},
+    )
+    assert completed.status_code == 200
+    mock_intent(monkeypatch, attraction_change_intent({
+        "operation": "replace", "target_name": "City Museum", "criterion": "nearby",
+    }))
+    protected = client.post("/api/v1/assistant/chat", headers={"Origin": ORIGIN}, json={
+        "trip_id": trip_id, "message": "Replace City Museum with something nearby.", "conversation_history": [],
+    })
+    assert protected.status_code == 200
+    assert protected.json()["proposal"] is None
+    assert "completed" in protected.json()["response"].lower()
+
+    another_trip = create_plannable_trip(
+        client, "replacement-crowd@example.com", attractions=two_stop_inputs(),
+    )
+    create_catalog_attraction(client, id="unknown-crowd", name="Unknown Crowd Park", category="park")
+    mock_intent(monkeypatch, attraction_change_intent({
+        "operation": "replace", "target_name": "City Museum", "criterion": "less_crowded",
+    }))
+    unavailable = client.post("/api/v1/assistant/chat", headers={"Origin": ORIGIN}, json={
+        "trip_id": another_trip, "message": "Replace City Museum with something less crowded.",
+        "conversation_history": [],
+    })
+    assert unavailable.status_code == 200
+    assert unavailable.json()["proposal"] is None
+    assert "known crowd data" in unavailable.json()["response"].lower()
+
+    mock_intent(monkeypatch, attraction_change_intent({
+        "operation": "replace", "target_name": "City Museum", "category": "beaches",
+    }))
+    no_candidate = client.post("/api/v1/assistant/chat", headers={"Origin": ORIGIN}, json={
+        "trip_id": another_trip, "message": "Replace City Museum with a beach.",
+        "conversation_history": [],
+    })
+    assert no_candidate.status_code == 200
+    assert no_candidate.json()["proposal"] is None
+    assert "no suitable" in no_candidate.json()["response"].lower()
 
 
 def test_pace_proposal_is_persisted_without_mutating_trip_then_accepts_and_preserves_completed(client, monkeypatch):

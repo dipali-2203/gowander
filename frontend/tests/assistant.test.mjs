@@ -41,3 +41,27 @@ test("assistant keeps provider credentials private and only applies explicit pro
   assert.match(ui, /proposal\.validation\.valid/);
   assert.match(ui, /getUserTrips\(\)/);
 });
+
+test("preference proposals render readable interest, tolerance, and transport before/after values", () => {
+  assert.match(ui, /interest weight/);
+  assert.match(ui, /Walking tolerance/);
+  assert.match(ui, /Crowd tolerance/);
+  assert.match(ui, /Risk tolerance/);
+  assert.match(ui, /Transportation mode/);
+  assert.match(ui, /Math\.round\(value \* 100\)/);
+  assert.match(ui, /changeLabel\(change\.field\).*changeValue\(change\.field, change\.before\)/s);
+});
+
+test("attraction proposals show catalog details without turning unknown values into facts", () => {
+  assert.match(ui, /Attraction added/);
+  assert.match(ui, /Attraction removed/);
+  assert.match(ui, /Attraction replaced/);
+  assert.match(ui, /change\.cost_known && typeof change\.fee === "number"/);
+  assert.match(ui, /change\.visit_duration_known && typeof change\.visit_minutes === "number"/);
+  assert.match(ui, /change\.opening_hours \|\| "Unavailable"/);
+  assert.match(ui, /change\.provider_name \|\| change\.data_source/);
+  assert.match(ui, /change\.attribution/);
+  assert.match(ui, /\^https\?:\\\/\\\//);
+  assert.match(ui, /Accept changes/);
+  assert.match(ui, /Reject/);
+});

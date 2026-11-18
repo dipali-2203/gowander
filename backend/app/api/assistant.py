@@ -1,4 +1,5 @@
 from copy import deepcopy
+from copy import deepcopy
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -9,7 +10,7 @@ from app.api.auth import get_current_user, require_allowed_origin
 from app.database import get_db
 from app.models import AssistantTripProposal, Trip, User
 from app.services.assistant import assistant_service
-from app.schemas import MultiDayItineraryResponse, MultiDayOptimizeRequest, Preferences
+from app.schemas import MultiDayItineraryResponse, MultiDayOptimizeRequest, Preferences, TripPlanningOptions
 from app.services.assistant.proposals import proposal_to_dict
 from app.services.assistant.schemas import AssistantChatRequest, AssistantChatResponse, AssistantIntentOutput
 from app.services.assistant.gemini_provider import (
@@ -168,6 +169,8 @@ def accept_assistant_proposal(
         expected_types = {
             "change_travel_pace": "travel_pace_change",
             "change_budget": "budget_change",
+            "change_preferences": "preference_change",
+            "change_attractions": "attraction_change",
         }
         if expected_types.get(intent.action) != proposal.proposal_type:
             raise ValueError("Proposal action mismatch")
@@ -175,6 +178,14 @@ def accept_assistant_proposal(
         if isinstance(budget, bool) or not isinstance(budget, (int, float)) or not 1 <= budget <= 5_000_000:
             raise ValueError("Invalid budget")
         preferences = Preferences.model_validate(proposed_inputs["preferences"]).model_dump(mode="json")
+        if "planning_options" in proposed_inputs:
+            planning_options = TripPlanningOptions.model_validate(
+                proposed_inputs["planning_options"]
+            ).model_dump(mode="json")
+        else:
+            # Older pending proposals predate staged planning options; preserve the
+            # trip's existing stored value when one of those proposals is accepted.
+            planning_options = deepcopy(trip.planning_options or {})
         planning_inputs = MultiDayOptimizeRequest.model_validate(proposed_inputs["planning_inputs"]).model_dump(mode="json")
         itinerary = MultiDayItineraryResponse.model_validate(proposal.proposed_itinerary).model_dump(mode="json")
         if itinerary.get("trip_id") != trip.id:
@@ -222,6 +233,7 @@ def accept_assistant_proposal(
         .values(
             budget=budget,
             preferences=preferences,
+            planning_options=planning_options,
             planning_inputs=planning_inputs,
             latest_itinerary=itinerary,
             itinerary_revision=proposal.base_revision + 1,
