@@ -189,6 +189,45 @@ def test_catalog_endpoint_labels_synthetic_fallback_and_returns_db_provenance(ap
     assert attraction["availability_risk_known"] is False
 
 
+@pytest.mark.parametrize(
+    ("city", "destination", "latitude", "longitude"),
+    [
+        ("jaipur", "Jaipur", 26.9258, 75.8237),
+        ("udaipur", "Udaipur", 24.5764, 73.6835),
+    ],
+)
+def test_catalog_endpoint_returns_city_poi_coordinates_unchanged(
+    api_client, city, destination, latitude, longitude,
+):
+    client, TestingSession = api_client
+    with TestingSession() as db:
+        db.add(Attraction(
+            id=f"osm:{city}:map-check",
+            destination=destination,
+            name=f"{destination} map coordinate check",
+            category="museum",
+            latitude=latitude,
+            longitude=longitude,
+            cost=0,
+            visit_minutes=60,
+            data_source="osm",
+            provider_name="openstreetmap",
+            external_provider_id=f"node:{city}:map-check",
+            source_dataset="Geofabrik test extract",
+            attribution="© OpenStreetMap contributors",
+            license_name="ODbL-1.0",
+            raw_tags={"tourism": "museum"},
+        ))
+        db.commit()
+
+    response = client.get(f"/api/v1/attractions/catalog/{city}")
+    assert response.status_code == 200
+    place = next(item for item in response.json()["attractions"] if item["id"] == f"osm:{city}:map-check")
+    assert place["latitude"] == latitude
+    assert place["longitude"] == longitude
+    assert place["source_dataset"] == "Geofabrik test extract"
+
+
 def test_ingestion_endpoint_rejects_ordinary_authenticated_user(api_client):
     client, _ = api_client
     signup = client.post("/api/v1/auth/signup", headers={"Origin": "http://localhost:3000"}, json={

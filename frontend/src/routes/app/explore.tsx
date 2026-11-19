@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { PageHeader } from "@/components/travel/PageHeader";
 import { DestinationCard } from "@/components/travel/DestinationCard";
 import { IndiaMap } from "@/components/travel/IndiaMap";
+import { AttractionMap } from "@/components/travel/AttractionMap";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -62,6 +63,8 @@ function Explore() {
   const [poiQuery, setPoiQuery] = useState("");
   const [poiCategory, setPoiCategory] = useState("All");
   const [browseAllPois, setBrowseAllPois] = useState(false);
+  const [selectedPoiId, setSelectedPoiId] = useState<string | null>(null);
+  const poiCardRefs = useMemo(() => new Map<string, HTMLElement>(), []);
   const add = useTripStore((s) => s.add);
 
   useEffect(() => {
@@ -168,20 +171,54 @@ function Explore() {
     "Entertainment",
     "Other",
   ];
-  const poiResults = (attractionCatalog?.attractions ?? [])
-    .filter((place) => {
-      const placeCategory = (place.catalog_category ?? place.category).toLowerCase();
-      const q = poiQuery.trim().toLowerCase();
-      return (
-        (poiCategory === "All" || placeCategory === poiCategory.toLowerCase()) &&
-        (!q || place.name.toLowerCase().includes(q) || placeCategory.includes(q))
-      );
-    })
-    .sort(
-      (a, b) =>
-        (b.priority_score ?? b.preference_score) - (a.priority_score ?? a.preference_score) ||
-        a.name.localeCompare(b.name),
-    );
+  const poiResults = useMemo(
+    () =>
+      (attractionCatalog?.attractions ?? [])
+        .filter((place) => {
+          const placeCategory = (place.catalog_category ?? place.category).toLowerCase();
+          const q = poiQuery.trim().toLowerCase();
+          return (
+            (poiCategory === "All" || placeCategory === poiCategory.toLowerCase()) &&
+            (!q || place.name.toLowerCase().includes(q) || placeCategory.includes(q))
+          );
+        })
+        .sort(
+          (a, b) =>
+            (b.priority_score ?? b.preference_score) - (a.priority_score ?? a.preference_score) ||
+            a.name.localeCompare(b.name),
+        ),
+    [attractionCatalog, poiCategory, poiQuery],
+  );
+
+  const visiblePois = useMemo(
+    () =>
+      browseAllPois || poiQuery || poiCategory !== "All" ? poiResults : poiResults.slice(0, 6),
+    [browseAllPois, poiCategory, poiQuery, poiResults],
+  );
+  const mappablePois = useMemo(
+    () =>
+      visiblePois.filter(
+        (place) =>
+          Number.isFinite(place.latitude) &&
+          Number.isFinite(place.longitude) &&
+          place.latitude >= -90 &&
+          place.latitude <= 90 &&
+          place.longitude >= -180 &&
+          place.longitude <= 180,
+      ),
+    [visiblePois],
+  );
+  const selectPoi = (id: string) => {
+    setSelectedPoiId(id);
+    requestAnimationFrame(() => {
+      poiCardRefs.get(id)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+  };
+  useEffect(() => {
+    if (selectedPoiId && !visiblePois.some((place) => place.id === selectedPoiId)) {
+      setSelectedPoiId(null);
+    }
+  }, [selectedPoiId, visiblePois]);
 
   return (
     <div className="space-y-5">
@@ -212,6 +249,7 @@ function Explore() {
                   setPoiQuery("");
                   setPoiCategory("All");
                   setBrowseAllPois(false);
+                  setSelectedPoiId(null);
                 }}
               >
                 {city[0]?.toUpperCase()}
@@ -245,132 +283,185 @@ function Explore() {
               <p className="text-sm text-amber-700">{attractionCatalog.message}</p>
             )}
             {attractionCatalog.attractions.length ? (
-              <div className="space-y-4">
-                <div className="flex flex-col gap-2 sm:flex-row">
-                  <Input
-                    aria-label="Search attractions"
-                    placeholder={`Search ${attractionCity} attractions`}
-                    value={poiQuery}
-                    onChange={(event) => setPoiQuery(event.target.value)}
+              <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
+                <div className="space-y-2 xl:sticky xl:top-24">
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="text-sm font-semibold">
+                      {attractionCity[0]?.toUpperCase()}
+                      {attractionCity.slice(1)} attractions map
+                    </h3>
+                    <span className="text-xs text-muted-foreground">
+                      {mappablePois.length} markers
+                    </span>
+                  </div>
+                  <AttractionMap
+                    city={attractionCity}
+                    attractions={visiblePois}
+                    selectedId={selectedPoiId}
+                    bookmarkedIds={bookmarkedIds}
+                    bookmarkBusyId={bookmarkBusy}
+                    dataset={
+                      attractionCatalog.attractions.find((place) => place.source_dataset)
+                        ?.source_dataset ?? null
+                    }
+                    attribution={attractionCatalog.attribution}
+                    onSelect={selectPoi}
+                    onBookmark={(id, name) => void onPoiBookmark(id, name)}
                   />
-                  <Button variant="outline" onClick={() => setBrowseAllPois((value) => !value)}>
-                    {browseAllPois
-                      ? "Show featured"
-                      : `Browse all ${attractionCatalog.attractions.length}`}
-                  </Button>
-                </div>
-                <div className="flex flex-wrap gap-2" aria-label="Attraction category filters">
-                  {["All", ...poiCategories].map((item) => {
-                    const count =
-                      item === "All"
-                        ? attractionCatalog.attractions.length
-                        : attractionCatalog.attractions.filter(
-                            (place) =>
-                              (place.catalog_category ?? place.category).toLowerCase() ===
-                              item.toLowerCase(),
-                          ).length;
-                    return (
-                      <Button
-                        key={item}
-                        size="sm"
-                        variant={poiCategory === item ? "default" : "outline"}
-                        onClick={() => {
-                          setPoiCategory(item);
-                          setBrowseAllPois(true);
-                        }}
-                      >
-                        {item} ({count})
-                      </Button>
-                    );
-                  })}
-                </div>
-                <h3 className="text-sm font-semibold">
-                  {browseAllPois || poiQuery || poiCategory !== "All"
-                    ? `${poiResults.length} matching attractions`
-                    : "Featured recommendations"}
-                </h3>
-                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                  {(browseAllPois || poiQuery || poiCategory !== "All"
-                    ? poiResults
-                    : poiResults.slice(0, 6)
-                  ).map((place) => (
-                    <article key={place.id} className="rounded-lg border border-border p-3">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <h3 className="truncate text-sm font-medium">{place.name}</h3>
-                          <p className="text-xs capitalize text-muted-foreground">
-                            {place.catalog_category ?? place.category} · Planning relevance{" "}
-                            {Math.round((place.priority_score ?? place.preference_score) * 100)}%
-                          </p>
-                        </div>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          aria-label={`${bookmarkedIds.includes(place.id) ? "Remove" : "Save"} ${place.name} bookmark`}
-                          aria-pressed={bookmarkedIds.includes(place.id)}
-                          disabled={bookmarkBusy === place.id}
-                          onClick={() => void onPoiBookmark(place.id, place.name)}
-                        >
-                          {bookmarkedIds.includes(place.id) ? (
-                            <BookmarkCheck className="h-4 w-4" />
-                          ) : (
-                            <Bookmark className="h-4 w-4" />
-                          )}
-                        </Button>
-                      </div>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        Fee: {place.cost_known ? `₹${place.cost}` : "Unknown"} · Duration:{" "}
-                        {place.visit_duration_known ? `${place.visit_minutes} min` : "Unknown"}
-                      </p>
-                      <details className="mt-2 text-xs">
-                        <summary className="cursor-pointer text-primary">More data</summary>
-                        <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-2 gap-y-1">
-                          <dt>Hours</dt>
-                          <dd>{place.opening_window_known ? place.opening_hours : "Unknown"}</dd>
-                          <dt>Coordinates</dt>
-                          <dd>
-                            {place.latitude.toFixed(5)}, {place.longitude.toFixed(5)}
-                          </dd>
-                          <dt>Record</dt>
-                          <dd>
-                            {(place.verification_status ?? "unknown").replaceAll("_", " ")};{" "}
-                            {place.data_freshness ?? "freshness unknown"}
-                          </dd>
-                          <dt>Dataset</dt>
-                          <dd>{place.source_dataset ?? "Source dataset unknown"}</dd>
-                          <dt>License</dt>
-                          <dd>{place.license_name ?? "Unknown"}</dd>
-                          <dt>Recommendation basis</dt>
-                          <dd>
-                            {place.priority_reasons?.join("; ") ||
-                              "Category-based relevance heuristic"}
-                          </dd>
-                        </dl>
-                        {place.source_url && (
-                          <a
-                            className="mt-2 inline-block text-primary underline"
-                            href={place.source_url}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            Open source record
-                          </a>
-                        )}
-                      </details>
-                    </article>
-                  ))}
-                </div>
-                {attractionCatalog.attribution && (
                   <p className="text-xs text-muted-foreground">
-                    {attractionCatalog.attribution}. Dataset and license are shown with each
-                    attraction record.
+                    Map tiles © OpenStreetMap contributors. Dataset:{" "}
+                    {attractionCatalog.attractions.find((place) => place.source_dataset)
+                      ?.source_dataset ?? "catalog source not specified"}
+                    . Markers use catalog coordinates; {visiblePois.length - mappablePois.length}{" "}
+                    record(s) without valid coordinates remain in the list.
                   </p>
-                )}
-                {!poiResults.length && (
-                  <p className="text-sm text-muted-foreground">
-                    No attractions match this search or category.
-                  </p>
-                )}
+                </div>
+                <div className="min-w-0 space-y-4">
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Input
+                      aria-label="Search attractions"
+                      placeholder={`Search ${attractionCity} attractions`}
+                      value={poiQuery}
+                      onChange={(event) => setPoiQuery(event.target.value)}
+                    />
+                    <Button variant="outline" onClick={() => setBrowseAllPois((value) => !value)}>
+                      {browseAllPois
+                        ? "Show featured"
+                        : `Browse all ${attractionCatalog.attractions.length}`}
+                    </Button>
+                  </div>
+                  <div className="flex flex-wrap gap-2" aria-label="Attraction category filters">
+                    {["All", ...poiCategories].map((item) => {
+                      const count =
+                        item === "All"
+                          ? attractionCatalog.attractions.length
+                          : attractionCatalog.attractions.filter(
+                              (place) =>
+                                (place.catalog_category ?? place.category).toLowerCase() ===
+                                item.toLowerCase(),
+                            ).length;
+                      return (
+                        <Button
+                          key={item}
+                          size="sm"
+                          variant={poiCategory === item ? "default" : "outline"}
+                          onClick={() => {
+                            setPoiCategory(item);
+                            setBrowseAllPois(true);
+                          }}
+                        >
+                          {item} ({count})
+                        </Button>
+                      );
+                    })}
+                  </div>
+                  <h3 className="text-sm font-semibold">
+                    {browseAllPois || poiQuery || poiCategory !== "All"
+                      ? `${poiResults.length} matching attractions`
+                      : "Featured recommendations"}
+                  </h3>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {visiblePois.map((place) => (
+                      <article
+                        key={place.id}
+                        ref={(element) => {
+                          if (element) poiCardRefs.set(place.id, element);
+                          else poiCardRefs.delete(place.id);
+                        }}
+                        className={`rounded-lg border p-3 transition-colors ${selectedPoiId === place.id ? "border-primary bg-primary/5" : "border-border"}`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <button
+                              type="button"
+                              className="truncate text-left text-sm font-medium hover:text-primary"
+                              aria-pressed={selectedPoiId === place.id}
+                              onClick={() => selectPoi(place.id)}
+                            >
+                              {place.name}
+                            </button>
+                            <p className="text-xs capitalize text-muted-foreground">
+                              {place.catalog_category ?? place.category} · Planning relevance{" "}
+                              {Math.round((place.priority_score ?? place.preference_score) * 100)}%
+                            </p>
+                          </div>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            aria-label={`${bookmarkedIds.includes(place.id) ? "Remove" : "Save"} ${place.name} bookmark`}
+                            aria-pressed={bookmarkedIds.includes(place.id)}
+                            disabled={bookmarkBusy === place.id}
+                            onClick={() => void onPoiBookmark(place.id, place.name)}
+                          >
+                            {bookmarkedIds.includes(place.id) ? (
+                              <BookmarkCheck className="h-4 w-4" />
+                            ) : (
+                              <Bookmark className="h-4 w-4" />
+                            )}
+                          </Button>
+                        </div>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Fee: {place.cost_known ? `₹${place.cost}` : "Unknown"} · Duration:{" "}
+                          {place.visit_duration_known ? `${place.visit_minutes} min` : "Unknown"}
+                        </p>
+                        <details className="mt-2 text-xs">
+                          <summary className="cursor-pointer text-primary">More data</summary>
+                          <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-2 gap-y-1">
+                            <dt>Hours</dt>
+                            <dd>{place.opening_window_known ? place.opening_hours : "Unknown"}</dd>
+                            <dt>Coordinates</dt>
+                            <dd>
+                              {Number.isFinite(place.latitude) && Number.isFinite(place.longitude)
+                                ? `${place.latitude.toFixed(5)}, ${place.longitude.toFixed(5)}`
+                                : "Unavailable"}
+                            </dd>
+                            <dt>Record</dt>
+                            <dd>
+                              {(place.verification_status ?? "unknown").replaceAll("_", " ")};{" "}
+                              {place.data_freshness ?? "freshness unknown"}
+                            </dd>
+                            <dt>Dataset</dt>
+                            <dd>{place.source_dataset ?? "Source dataset unknown"}</dd>
+                            <dt>License</dt>
+                            <dd>{place.license_name ?? "Unknown"}</dd>
+                            <dt>Recommendation basis</dt>
+                            <dd>
+                              {place.priority_reasons?.join("; ") ||
+                                "Category-based relevance heuristic"}
+                            </dd>
+                          </dl>
+                          {place.source_url && (
+                            <a
+                              className="mt-2 inline-block text-primary underline"
+                              href={place.source_url}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              Open source record
+                            </a>
+                          )}
+                        </details>
+                      </article>
+                    ))}
+                  </div>
+                  {attractionCatalog.attribution && (
+                    <p className="text-xs text-muted-foreground">
+                      {attractionCatalog.attribution}. Dataset and license are shown with each
+                      attraction record.
+                    </p>
+                  )}
+                  {!poiResults.length && (
+                    <p className="text-sm text-muted-foreground">
+                      No attractions match this search or category.
+                    </p>
+                  )}
+                  {visiblePois.some((place) => !mappablePois.includes(place)) && (
+                    <p className="text-xs text-muted-foreground">
+                      Some matching attractions have no valid coordinates. They remain available in
+                      the catalog but cannot be plotted.
+                    </p>
+                  )}
+                </div>
               </div>
             ) : (
               <p className="text-sm text-muted-foreground">
