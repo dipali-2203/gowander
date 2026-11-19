@@ -47,13 +47,21 @@ function CompleteBudgetDetails({ budget }: { budget: CompleteTripBudget }) {
           <p className="text-xs text-muted-foreground">Budget status</p>
           <p className="mt-1 text-sm font-semibold">
             {budget.within_budget === true
-              ? "Within budget estimate"
+              ? "Within budget across estimated ranges"
               : budget.within_budget === false && overrun !== null
-                ? `Over budget by ${formatInr(Math.max(0, overrun))}`
+                ? `Over budget at the upper estimate by ${formatInr(Math.max(0, (budget.total_estimate_range_max ?? total ?? 0) - budgetLimit!))}`
                 : "Feasibility cannot be fully determined"}
           </p>
         </div>
       </div>
+
+      {typeof budget.total_estimate_range_min === "number" &&
+        typeof budget.total_estimate_range_max === "number" && (
+          <p className="text-xs text-muted-foreground">
+            Indicative total range: {formatInr(budget.total_estimate_range_min)}–
+            {formatInr(budget.total_estimate_range_max)}. Budget checks use upper estimate bounds.
+          </p>
+        )}
 
       {typeof total !== "number" && (
         <p className="rounded-lg bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-200">
@@ -105,6 +113,28 @@ function CompleteBudgetDetails({ budget }: { budget: CompleteTripBudget }) {
             </summary>
             <div className="mt-2 space-y-1 text-xs text-muted-foreground">
               <p>Source: {category.source ?? "Unavailable"}</p>
+              {typeof category.range_min === "number" && typeof category.range_max === "number" && (
+                <p>
+                  Indicative range: {formatInr(category.range_min)}–{formatInr(category.range_max)}
+                </p>
+              )}
+              {category.mode && <p>Mode: {category.mode.replaceAll("_", " ")}</p>}
+              {category.unit_basis && <p>Rate basis: {category.unit_basis.replaceAll("_", " ")}</p>}
+              {category.amount_basis && (
+                <p>Amount basis: {category.amount_basis.replaceAll("_", " ")}</p>
+              )}
+              {category.traveler_count ? (
+                <p>Traveler count used: {category.traveler_count}</p>
+              ) : null}
+              {typeof category.distance_km === "number" && (
+                <p>
+                  Modeled distance:{" "}
+                  {category.distance_km.toLocaleString("en-IN", { maximumFractionDigits: 1 })} km
+                </p>
+              )}
+              {category.estimated_at && (
+                <p>Estimate created: {new Date(category.estimated_at).toLocaleString()}</p>
+              )}
               {category.assumptions.map((assumption) => (
                 <p key={assumption}>{assumption}</p>
               ))}

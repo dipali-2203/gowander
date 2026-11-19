@@ -84,6 +84,13 @@ def _public_itinerary(trip: Trip) -> dict:
                         "confidence": item.get("confidence"),
                         "range_min": item.get("range_min"),
                         "range_max": item.get("range_max"),
+                        "mode": item.get("mode"),
+                        "unit_basis": item.get("unit_basis"),
+                        "amount_basis": item.get("amount_basis"),
+                        "traveler_count": item.get("traveler_count"),
+                        "distance_km": item.get("distance_km"),
+                        "estimated_at": item.get("estimated_at"),
+                        "method": item.get("method"),
                     }
                     for item in complete.get("categories", []) or []
                     if isinstance(item, dict)
@@ -95,6 +102,8 @@ def _public_itinerary(trip: Trip) -> dict:
                 "partial_categories": [str(value) for value in complete.get("partial_categories", []) or []],
                 "completeness": str(complete.get("completeness") or "incomplete"),
                 "total_estimate": complete.get("total_estimate"),
+                "total_estimate_range_min": complete.get("total_estimate_range_min"),
+                "total_estimate_range_max": complete.get("total_estimate_range_max"),
                 "budget_limit": complete.get("budget_limit"),
                 "remaining_budget": complete.get("remaining_budget"),
                 "within_budget": complete.get("within_budget"),

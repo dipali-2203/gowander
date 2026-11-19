@@ -130,6 +130,13 @@ export type CompleteBudgetCategory = {
   confidence?: string;
   range_min?: number | null;
   range_max?: number | null;
+  mode?: string | null;
+  unit_basis?: string | null;
+  amount_basis?: string | null;
+  traveler_count?: number | null;
+  distance_km?: number | null;
+  estimated_at?: string | null;
+  method?: string | null;
 };
 
 export type CompleteTripBudget = {
@@ -144,6 +151,8 @@ export type CompleteTripBudget = {
   partial_categories: string[];
   completeness: string;
   total_estimate: number | null;
+  total_estimate_range_min?: number | null;
+  total_estimate_range_max?: number | null;
   budget_limit?: number | null;
   remaining_budget?: number | null;
   within_budget: boolean | null;
@@ -513,6 +522,48 @@ export type IntercityCostInput = {
   status: "user_provided" | "estimated" | "unavailable";
   source: string | null;
   assumptions: string[];
+  mode?: string | null;
+  unit_basis?: string | null;
+  amount_basis?: string | null;
+  traveler_count?: number | null;
+  range_min?: number | null;
+  range_max?: number | null;
+  distance_km?: number | null;
+  estimated_at?: string | null;
+  method?: string | null;
+  zero_fare_confirmed?: boolean;
+  override_confirmed?: boolean;
+};
+
+export type TransportationCostPreview = {
+  status: "estimated" | "unavailable";
+  amount: number | null;
+  representative_amount?: number | null;
+  range_min?: number | null;
+  range_max?: number | null;
+  mode?: string | null;
+  unit_basis?: string | null;
+  amount_basis?: string | null;
+  traveler_count?: number;
+  distance_km?: number | null;
+  estimated_at?: string | null;
+  source?: string | null;
+  method?: string | null;
+  assumptions: string[];
+  mode_estimates?: Record<string, TransportationCostPreview>;
+};
+
+export type TransportationEstimatePreview = {
+  origin: { latitude: number; longitude: number; source: string; display_name: string } | null;
+  destination: { latitude: number; longitude: number; source: string; display_name: string } | null;
+  distance_km: number | null;
+  road_distance_km?: number | null;
+  distance_basis: string;
+  outbound: TransportationCostPreview;
+  return: TransportationCostPreview;
+  provisional: boolean;
+  attribution?: string | null;
+  manual_validation?: Record<string, { confirmation_required: boolean; warning: string | null }>;
 };
 
 export type TripDetails = AccountTrip & {
@@ -626,6 +677,43 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     );
   }
   return response.json() as Promise<T>;
+}
+
+export async function getTransportationEstimate(input: {
+  origin: string;
+  destination: string;
+  travelerCount: number;
+  mode: string | null;
+  originLatitude?: number | null;
+  originLongitude?: number | null;
+  destinationLatitude?: number | null;
+  destinationLongitude?: number | null;
+  outboundAmount?: number | null;
+  returnAmount?: number | null;
+  outboundZeroFareConfirmed?: boolean;
+  returnZeroFareConfirmed?: boolean;
+  outboundOverrideConfirmed?: boolean;
+  returnOverrideConfirmed?: boolean;
+}) {
+  return request<TransportationEstimatePreview>("/api/v1/trips/transportation-estimate", {
+    method: "POST",
+    body: JSON.stringify({
+      origin: input.origin,
+      destination: input.destination,
+      traveler_count: input.travelerCount,
+      intercity_mode: input.mode,
+      origin_latitude: input.originLatitude ?? null,
+      origin_longitude: input.originLongitude ?? null,
+      destination_latitude: input.destinationLatitude ?? null,
+      destination_longitude: input.destinationLongitude ?? null,
+      outbound_amount: input.outboundAmount ?? null,
+      return_amount: input.returnAmount ?? null,
+      outbound_zero_fare_confirmed: input.outboundZeroFareConfirmed ?? false,
+      return_zero_fare_confirmed: input.returnZeroFareConfirmed ?? false,
+      outbound_override_confirmed: input.outboundOverrideConfirmed ?? false,
+      return_override_confirmed: input.returnOverrideConfirmed ?? false,
+    }),
+  });
 }
 
 export async function signUp(input: { name: string; email: string; password: string }) {
@@ -918,6 +1006,10 @@ export async function createAndOptimizeTrip(input: {
   intercityTransportationMode: string | null;
   intercityOutboundCost: number | null;
   intercityReturnCost: number | null;
+  outboundZeroFareConfirmed?: boolean;
+  returnZeroFareConfirmed?: boolean;
+  outboundOverrideConfirmed?: boolean;
+  returnOverrideConfirmed?: boolean;
   mealPreferences: string[];
   interests: string[];
   preferences: {
@@ -928,6 +1020,96 @@ export async function createAndOptimizeTrip(input: {
     transport: string;
   };
 }): Promise<PlanningResult> {
+  let transportPreview = await getTransportationEstimate({
+    origin: input.origin,
+    destination: input.destination,
+    travelerCount: input.travelerCount,
+    mode: input.intercityTransportationMode,
+    outboundAmount: input.intercityOutboundCost,
+    returnAmount: input.intercityReturnCost,
+  });
+  const validations = transportPreview.manual_validation ?? {};
+  const needsConfirmation = Object.values(validations).some((item) => item.confirmation_required);
+  const zeroFlags = {
+    outbound: input.outboundZeroFareConfirmed ?? false,
+    return: input.returnZeroFareConfirmed ?? false,
+  };
+  const overrideFlags = {
+    outbound: input.outboundOverrideConfirmed ?? false,
+    return: input.returnOverrideConfirmed ?? false,
+  };
+  if (needsConfirmation) {
+    const warnings = Object.values(validations)
+      .filter((item) => item.confirmation_required && item.warning)
+      .map((item) => item.warning);
+    if (!window.confirm(`${warnings.join("\n\n")}\n\nKeep the entered whole-group amount?`)) {
+      throw new Error("Review the transportation amount or confirm it before creating the trip.");
+    }
+    for (const direction of ["outbound", "return"] as const) {
+      if (validations[direction]?.confirmation_required) {
+        if (
+          input[direction === "outbound" ? "intercityOutboundCost" : "intercityReturnCost"] === 0
+        ) {
+          zeroFlags[direction] = true;
+        } else {
+          overrideFlags[direction] = true;
+        }
+      }
+    }
+    transportPreview = await getTransportationEstimate({
+      origin: input.origin,
+      destination: input.destination,
+      travelerCount: input.travelerCount,
+      mode: input.intercityTransportationMode,
+      outboundAmount: input.intercityOutboundCost,
+      returnAmount: input.intercityReturnCost,
+      outboundZeroFareConfirmed: zeroFlags.outbound,
+      returnZeroFareConfirmed: zeroFlags.return,
+      outboundOverrideConfirmed: overrideFlags.outbound,
+      returnOverrideConfirmed: overrideFlags.return,
+    });
+  }
+  const intercityRecord = (
+    amount: number | null,
+    estimate: TransportationCostPreview,
+    direction: "outbound" | "return",
+  ): IntercityCostInput =>
+    amount === null
+      ? {
+          amount: estimate.amount,
+          currency: "INR",
+          status: estimate.status,
+          source: estimate.source ?? null,
+          assumptions: estimate.assumptions,
+          mode: estimate.mode ?? null,
+          unit_basis: estimate.unit_basis ?? null,
+          amount_basis: estimate.amount_basis ?? "whole_group_total",
+          traveler_count: estimate.traveler_count ?? input.travelerCount,
+          range_min: estimate.range_min ?? null,
+          range_max: estimate.range_max ?? null,
+          distance_km: estimate.distance_km ?? null,
+          estimated_at: estimate.estimated_at ?? null,
+          method: estimate.method ?? null,
+        }
+      : {
+          amount,
+          currency: "INR",
+          status: "user_provided",
+          source: "User input",
+          assumptions: ["Traveler-entered whole-group total for this leg; not a provider quote."],
+          mode: estimate.mode ?? null,
+          unit_basis: estimate.unit_basis ?? "unknown",
+          amount_basis: "whole_group_total",
+          traveler_count: input.travelerCount,
+          range_min: estimate.range_min ?? null,
+          range_max: estimate.range_max ?? null,
+          distance_km: estimate.distance_km ?? null,
+          estimated_at: estimate.estimated_at ?? null,
+          method: estimate.method ?? null,
+          zero_fare_confirmed: zeroFlags[direction],
+          override_confirmed: overrideFlags[direction],
+        };
+
   const catalog = await getAttractionCatalog(input.destination);
   if (catalog.attractions.length === 0) {
     throw new Error(
@@ -958,6 +1140,15 @@ export async function createAndOptimizeTrip(input: {
     body: JSON.stringify({
       name: `${input.origin} to ${input.destination}`,
       origin: input.origin,
+      origin_latitude: transportPreview.origin?.latitude ?? null,
+      origin_longitude: transportPreview.origin?.longitude ?? null,
+      intercity_destination_latitude: transportPreview.destination?.latitude ?? null,
+      intercity_destination_longitude: transportPreview.destination?.longitude ?? null,
+      intercity_route_source:
+        [transportPreview.origin?.source, transportPreview.destination?.source]
+          .filter(Boolean)
+          .join(" + ") || null,
+      intercity_route_attribution: transportPreview.attribution ?? null,
       destination: input.destination,
       start_date: toIsoDate(start),
       end_date: toIsoDate(end),
@@ -983,38 +1174,16 @@ export async function createAndOptimizeTrip(input: {
         meal_preferences: input.mealPreferences,
         miscellaneous_budget: input.miscellaneousBudget,
         intercity_transportation_mode: input.intercityTransportationMode,
-        intercity_outbound_cost:
-          input.intercityOutboundCost === null
-            ? {
-                amount: null,
-                currency: "INR",
-                status: "unavailable",
-                source: null,
-                assumptions: [],
-              }
-            : {
-                amount: input.intercityOutboundCost,
-                currency: "INR",
-                status: "user_provided",
-                source: "User input",
-                assumptions: ["Traveler-provided estimate; not a fare quote."],
-              },
-        intercity_return_cost:
-          input.intercityReturnCost === null
-            ? {
-                amount: null,
-                currency: "INR",
-                status: "unavailable",
-                source: null,
-                assumptions: [],
-              }
-            : {
-                amount: input.intercityReturnCost,
-                currency: "INR",
-                status: "user_provided",
-                source: "User input",
-                assumptions: ["Traveler-provided estimate; not a fare quote."],
-              },
+        intercity_outbound_cost: intercityRecord(
+          input.intercityOutboundCost,
+          transportPreview.outbound,
+          "outbound",
+        ),
+        intercity_return_cost: intercityRecord(
+          input.intercityReturnCost,
+          transportPreview.return,
+          "return",
+        ),
       },
     }),
   });

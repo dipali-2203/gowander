@@ -7,6 +7,7 @@ from math import ceil
 from app.models import Trip
 from app.schemas import AttractionInput, TripPlanningOptions
 from app.services.routing import haversine_km
+from app.services.transportation_estimator import local_transport_cost
 
 
 HOTEL_DEFAULTS = {
@@ -16,7 +17,6 @@ HOTEL_DEFAULTS = {
     "luxury": 15000.0,
 }
 MEAL_MULTIPLIERS = {"budget": 0.65, "standard": 1.0, "premium": 1.6, "luxury": 2.4}
-PASSENGER_TRANSPORT = {"public transport", "bus", "train"}
 
 
 def _configured_amount(key: str, fallback: float) -> float:
@@ -90,27 +90,8 @@ def estimate_trip_budget(
             journey_count += 1
             current = location
 
-    mode = options.transportation_mode.strip().lower()
-    normalized_mode = "public transport" if mode in {"metro", "transit"} else mode
-    fare_rates = {
-        "walking": 0.0,
-        "public transport": 18.0,
-        "bus": 12.0,
-        "train": 20.0,
-        "taxi": 25.0,
-        "cab": 25.0,
-        "car": 12.0,
-        "private car": 12.0,
-        "rental vehicle": 18.0,
-        "mixed": 18.0,
-    }
-    default_rate = fare_rates.get(normalized_mode, fare_rates["mixed"])
-    rate = _configured_amount(
-        "TRIP_LOCAL_FARE_INR_PER_KM_" + "".join(ch if ch.isalnum() else "_" for ch in normalized_mode.upper()),
-        default_rate,
-    )
-    fare_units = traveler_count if normalized_mode in PASSENGER_TRANSPORT else 1
-    transportation = round(route_km * rate * fare_units, 2)
+    local_cost = local_transport_cost(route_km, journey_count, options.transportation_mode, traveler_count)
+    transportation = local_cost.get("amount")
 
     accommodation, nightly_rate, accommodation_assumption, accommodation_confidence = _accommodation_cost(
         trip, nights, rooms, options,
@@ -123,7 +104,7 @@ def estimate_trip_budget(
     # This legacy total intentionally retains destination-only semantics for old
     # API/UI consumers. The versioned complete-budget object below is authoritative
     # for complete-journey totals.
-    total = round(attraction_cost + transportation + accommodation + meals + miscellaneous, 2)
+    total = round(attraction_cost + (transportation or 0.0) + accommodation + meals + miscellaneous, 2)
     per_person = round(total / traveler_count, 2)
     daily_average = round(total / day_count, 2)
     budget_limit = round(trip.budget, 2)
@@ -138,9 +119,9 @@ def estimate_trip_budget(
         },
         {
             "key": "transportation", "label": "Local transportation", "amount": transportation,
-            "source": "configurable_estimate", "confidence": "low",
-            "range_min": round(transportation * 0.75, 2), "range_max": round(transportation * 1.35, 2),
-            "assumptions": [f"{route_km:.1f} km over {journey_count} estimated local legs at ₹{rate:g}/km for {options.transportation_mode}.", fallback_assumption],
+            "source": local_cost.get("source", "configurable_estimate"), "confidence": "low",
+            "range_min": local_cost.get("range_min"), "range_max": local_cost.get("range_max"),
+            "assumptions": [*local_cost.get("assumptions", []), fallback_assumption],
         },
         {
             "key": "accommodation", "label": "Selected accommodation" if getattr(trip, "accommodation_selection", None) else "Accommodation allowance", "amount": accommodation,
@@ -180,11 +161,21 @@ def estimate_trip_budget(
             return {
                 "key": key, "label": label, "amount": None, "currency": currency,
                 "status": "unavailable", "source": source, "assumptions": assumptions,
+                "range_min": _read(item, "range_min"), "range_max": _read(item, "range_max"),
+                "mode": _read(item, "mode"), "unit_basis": _read(item, "unit_basis"),
+                "amount_basis": _read(item, "amount_basis"),
+                "traveler_count": _read(item, "traveler_count"), "distance_km": _read(item, "distance_km"),
+                "estimated_at": _read(item, "estimated_at"), "method": _read(item, "method"),
             }
         return {
             "key": key, "label": label, "amount": round(float(amount), 2),
             "currency": "INR", "status": status, "source": source,
             "assumptions": assumptions,
+            "range_min": _read(item, "range_min"), "range_max": _read(item, "range_max"),
+            "mode": _read(item, "mode"), "unit_basis": _read(item, "unit_basis"),
+            "amount_basis": _read(item, "amount_basis"),
+            "traveler_count": _read(item, "traveler_count"), "distance_km": _read(item, "distance_km"),
+            "estimated_at": _read(item, "estimated_at"), "method": _read(item, "method"),
         }
 
     outbound = intercity_category(
@@ -207,10 +198,12 @@ def estimate_trip_budget(
         outbound,
         returning,
         {"key": "local_transport", "label": "Local transportation", "amount": transportation,
-         "currency": "INR", "status": "estimated", "source": "configurable_distance_estimate",
-         "confidence": "low", "range_min": round(transportation * 0.75, 2),
-         "range_max": round(transportation * 1.35, 2),
-         "assumptions": [f"{route_km:.1f} straight-line km over {journey_count} local legs at INR {rate:g}/km; not a road-route fare.", fallback_assumption]},
+         "currency": "INR", "status": local_cost.get("status", "unavailable"),
+         "source": local_cost.get("source", "configurable_distance_estimate"),
+         "confidence": "low", "range_min": local_cost.get("range_min"),
+         "range_max": local_cost.get("range_max"), "mode": local_cost.get("mode", options.transportation_mode),
+         "unit_basis": local_cost.get("unit_basis"), "amount_basis": local_cost.get("amount_basis"),
+         "assumptions": [*local_cost.get("assumptions", []), fallback_assumption]},
         {"key": "accommodation", "label": "Accommodation", "amount": accommodation,
          "currency": "INR", "status": "estimated", "source": "selected_hotel_listing" if accommodation_confidence == "source_tag" else "configurable_allowance",
          "confidence": accommodation_confidence,
@@ -243,6 +236,15 @@ def estimate_trip_budget(
         if item["status"] in {"partial", "unavailable"}
     ]
     complete_total = None if incomplete_categories else round(known_subtotal + estimated_subtotal, 2)
+    total_range_min = None if incomplete_categories else round(sum(
+        item.get("range_min") if isinstance(item.get("range_min"), (int, float)) else item["amount"]
+        for item in complete_categories if item["amount"] is not None
+    ), 2)
+    total_range_max = None if incomplete_categories else round(sum(
+        item.get("range_max") if isinstance(item.get("range_max"), (int, float)) else item["amount"]
+        for item in complete_categories if item["amount"] is not None
+    ), 2)
+    within_budget = None if complete_total is None or total_range_max is None else total_range_max <= budget_limit + 1e-9
     completeness = "complete" if not incomplete_categories else ("partial" if known_subtotal + estimated_subtotal + partial_subtotal > 0 else "unavailable")
     complete_budget = {
         "schema_version": 2,
@@ -255,10 +257,12 @@ def estimate_trip_budget(
         "partial_categories": [item["key"] for item in complete_categories if item["status"] == "partial"],
         "completeness": completeness,
         "total_estimate": complete_total,
+        "total_estimate_range_min": total_range_min,
+        "total_estimate_range_max": total_range_max,
         "budget_limit": budget_limit,
-        "remaining_budget": round(budget_limit - complete_total, 2) if complete_total is not None else None,
-        "within_budget": complete_total <= budget_limit + 1e-9 if complete_total is not None else None,
-        "assumptions": [fallback_assumption, "No automatic intercity fare provider is configured; outbound and return amounts require explicit input."],
+        "remaining_budget": round(budget_limit - total_range_max, 2) if total_range_max is not None else None,
+        "within_budget": within_budget,
+        "assumptions": [fallback_assumption, "Where a cost is estimated, the budget allocation and feasibility check use its upper range; displayed category amounts are representative estimates."],
         "exclusions": ["Unknown or partial categories are not added as zero to the complete total."],
     }
     return {
@@ -300,5 +304,6 @@ def attraction_budget_after_fixed_costs(trip: Trip) -> float:
     )
     for cost in (options.intercity_outbound_cost, options.intercity_return_cost):
         if cost is not None and cost.status != "unavailable" and cost.amount is not None and cost.currency == "INR":
-            fixed += float(cost.amount)
+            reserve = cost.range_max if cost.status == "estimated" and cost.range_max is not None else cost.amount
+            fixed += float(reserve)
     return max(0.0, trip.budget - fixed)

@@ -32,7 +32,11 @@ def estimate_minutes(a: Location, b: Location, *, transport_mode: str = "mixed",
     distance = haversine_km(a, b)
     if distance < 0.01:
         return 0
-    mode = transport_mode.strip().lower()
+    mode = transport_mode.strip().lower().replace("_", " ")
+    mode = {
+        "transit": "public transport", "metro": "public transport",
+        "auto": "taxi", "rental vehicle": "rental vehicle",
+    }.get(mode, mode)
     if mode in {"walk", "walking"}:
         # Tolerance changes only this walking estimate, never car travel.
         speed, buffer = 3.8 + max(0.0, min(1.0, walking_tolerance)) * 1.2, 3

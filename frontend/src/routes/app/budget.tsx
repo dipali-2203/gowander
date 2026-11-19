@@ -587,10 +587,10 @@ function TripBudgetCard({ trip }: { trip: AccountTrip }) {
       ? completeBudget.remaining_budget
       : null;
   const status =
-    completeIsCurrent && typeof total === "number" && completeBudget?.within_budget !== null
+    completeIsCurrent && typeof total === "number" && typeof completeBudget?.within_budget === "boolean"
       ? completeBudget?.within_budget === false
         ? { label: "Over Budget", tone: "danger" as const }
-        : { label: "Within Budget Estimate", tone: "success" as const }
+        : { label: "Within Estimated Range", tone: "success" as const }
       : null;
   const start = Date.parse(`${trip.start_date}T00:00:00Z`);
   const end = Date.parse(`${trip.end_date}T00:00:00Z`);
@@ -636,7 +636,7 @@ function TripBudgetCard({ trip }: { trip: AccountTrip }) {
           }
         />
         <Metric
-          label="Remaining"
+          label="Remaining at upper estimate"
           value={remaining === null ? "Unavailable" : inr(remaining)}
           emphasis={remaining !== null && remaining < 0}
         />

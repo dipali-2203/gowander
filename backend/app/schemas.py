@@ -58,7 +58,7 @@ class ProfileUpdate(BaseModel):
 
 
 class IntercityCostInput(BaseModel):
-    """Explicit intercity amount; this application has no automatic fare source yet."""
+    """Per-leg whole-group estimate or user override, with provenance metadata."""
 
     model_config = {"extra": "forbid"}
 
@@ -67,6 +67,17 @@ class IntercityCostInput(BaseModel):
     status: Literal["user_provided", "estimated", "unavailable"] = "unavailable"
     source: str | None = Field(default=None, max_length=120)
     assumptions: list[str] = Field(default_factory=list, max_length=20)
+    mode: str | None = Field(default=None, max_length=40)
+    unit_basis: str | None = Field(default=None, max_length=40)
+    amount_basis: str | None = Field(default=None, max_length=40)
+    traveler_count: int | None = Field(default=None, ge=1, le=30)
+    range_min: float | None = Field(default=None, ge=0, le=5_000_000)
+    range_max: float | None = Field(default=None, ge=0, le=5_000_000)
+    distance_km: float | None = Field(default=None, ge=0, le=100_000)
+    estimated_at: datetime | None = None
+    method: str | None = Field(default=None, max_length=80)
+    zero_fare_confirmed: bool = False
+    override_confirmed: bool = False
 
     @model_validator(mode="after")
     def validate_cost(self):
@@ -78,6 +89,8 @@ class IntercityCostInput(BaseModel):
             self.source = "User input"
         if self.status == "estimated" and not self.source:
             raise ValueError("Estimated intercity costs require a source.")
+        if self.range_min is not None and self.range_max is not None and self.range_min > self.range_max:
+            raise ValueError("The minimum transportation estimate cannot exceed its maximum.")
         return self
 
 
@@ -95,12 +108,41 @@ class TripPlanningOptions(BaseModel):
     intercity_return_cost: IntercityCostInput | None = None
 
 
+class TransportationEstimateRequest(BaseModel):
+    origin: str = Field(min_length=1, max_length=100)
+    destination: str = Field(min_length=1, max_length=100)
+    traveler_count: int = Field(default=1, ge=1, le=30)
+    intercity_mode: Literal["train", "bus", "flight", "private_car"] | None = None
+    origin_latitude: float | None = Field(default=None, ge=-90, le=90)
+    origin_longitude: float | None = Field(default=None, ge=-180, le=180)
+    destination_latitude: float | None = Field(default=None, ge=-90, le=90)
+    destination_longitude: float | None = Field(default=None, ge=-180, le=180)
+    outbound_amount: float | None = Field(default=None, ge=0, le=5_000_000)
+    return_amount: float | None = Field(default=None, ge=0, le=5_000_000)
+    outbound_zero_fare_confirmed: bool = False
+    return_zero_fare_confirmed: bool = False
+    outbound_override_confirmed: bool = False
+    return_override_confirmed: bool = False
+
+    @model_validator(mode="after")
+    def validate_coordinates(self):
+        for lat, lon in ((self.origin_latitude, self.origin_longitude), (self.destination_latitude, self.destination_longitude)):
+            if (lat is None) != (lon is None):
+                raise ValueError("Coordinates must be provided as a latitude/longitude pair.")
+        return self
+
+
 class TripCreate(BaseModel):
     name: str | None = Field(default=None, max_length=150)
     origin: str = Field(default="", max_length=100)
     origin_latitude: float | None = Field(default=None, ge=-90, le=90)
     origin_longitude: float | None = Field(default=None, ge=-180, le=180)
     origin_place_id: str | None = Field(default=None, max_length=200)
+    # Route endpoint only; destination-local start_* coordinates remain separate.
+    intercity_destination_latitude: float | None = Field(default=None, ge=-90, le=90, exclude=True)
+    intercity_destination_longitude: float | None = Field(default=None, ge=-180, le=180, exclude=True)
+    intercity_route_source: str | None = Field(default=None, max_length=80, exclude=True)
+    intercity_route_attribution: str | None = Field(default=None, max_length=200, exclude=True)
     destination: str = Field(min_length=2, max_length=100)
     start_date: date
     end_date: date
@@ -118,6 +160,8 @@ class TripCreate(BaseModel):
             raise ValueError("end_date must not precede start_date")
         if (self.origin_latitude is None) != (self.origin_longitude is None):
             raise ValueError("Origin latitude and longitude must be provided together.")
+        if (self.intercity_destination_latitude is None) != (self.intercity_destination_longitude is None):
+            raise ValueError("Intercity destination coordinates must be provided as a pair.")
         return self
 
 

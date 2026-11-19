@@ -17,7 +17,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { createAndOptimizeTrip, getAttractionCatalog, getTravelPreferences } from "@/lib/api";
+import {
+  createAndOptimizeTrip,
+  getAttractionCatalog,
+  getTravelPreferences,
+  getTransportationEstimate,
+  type TransportationEstimatePreview,
+} from "@/lib/api";
 import { useTripStore } from "@/store/trip";
 import { toast } from "sonner";
 
@@ -65,6 +71,26 @@ const loadingSteps = [
   "Generating itinerary…",
 ];
 
+function manualTransportationWarning(
+  value: string,
+  cost: TransportationEstimatePreview["outbound"] | undefined,
+) {
+  if (!value.trim()) return null;
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount < 0)
+    return "Enter a finite, non-negative whole-group total.";
+  if (amount > 5_000_000) return "The maximum manual amount is ₹5,000,000 per leg.";
+  if (amount === 0) return "Zero needs explicit confirmation that this leg is genuinely free.";
+  if (typeof cost?.range_min === "number" && typeof cost.range_max === "number") {
+    const low = cost.range_min;
+    const high = cost.range_max;
+    if (amount < low * 0.5 || amount > Math.max(high * 2, high + 5000)) {
+      return `This is outside the broad indicative range ₹${low.toLocaleString("en-IN")}–₹${high.toLocaleString("en-IN")}. You will need to confirm it is intentional.`;
+    }
+  }
+  return null;
+}
+
 function Planner() {
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
@@ -77,7 +103,7 @@ function Planner() {
     to: "Jaipur",
     days: 6,
     budget: [60000],
-    transport: "car",
+    transport: "private_car",
     intercityTransport: "",
     outboundCost: "",
     returnCost: "",
@@ -90,6 +116,53 @@ function Planner() {
     pace: [0.5],
     picks: [] as string[],
   });
+  const [transportEstimate, setTransportEstimate] = useState<TransportationEstimatePreview | null>(
+    null,
+  );
+  const [transportEstimateLoading, setTransportEstimateLoading] = useState(false);
+  const [transportEstimateError, setTransportEstimateError] = useState<string | null>(null);
+
+  const refreshTransportEstimate = async (route?: {
+    origin?: string;
+    destination?: string;
+    mode?: string | null;
+    travelers?: number;
+  }) => {
+    const origin = route?.origin ?? form.from.trim();
+    const destination = route?.destination ?? form.to.trim();
+    if (!origin || !destination || origin.toLowerCase() === destination.toLowerCase()) {
+      setTransportEstimate(null);
+      return;
+    }
+    setTransportEstimateLoading(true);
+    setTransportEstimateError(null);
+    try {
+      const estimate = await getTransportationEstimate({
+        origin,
+        destination,
+        travelerCount: route?.travelers ?? form.travellers,
+        mode: route?.mode === undefined ? form.intercityTransport || null : route.mode,
+        originLatitude: transportEstimate?.origin?.latitude ?? null,
+        originLongitude: transportEstimate?.origin?.longitude ?? null,
+        destinationLatitude: transportEstimate?.destination?.latitude ?? null,
+        destinationLongitude: transportEstimate?.destination?.longitude ?? null,
+      });
+      setTransportEstimate(estimate);
+    } catch (error) {
+      setTransportEstimate(null);
+      setTransportEstimateError(
+        error instanceof Error ? error.message : "Transportation estimate unavailable.",
+      );
+    } finally {
+      setTransportEstimateLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void refreshTransportEstimate();
+    // Initial route estimate only; subsequent route changes are resolved on field blur.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const destination = form.to.trim();
@@ -138,9 +211,24 @@ function Planner() {
                 ],
           transport: editedFields.current.has("transport")
             ? current.transport
-            : preferences.transportation?.toLowerCase() === "motorbike"
-              ? "mixed"
-              : (preferences.transportation?.toLowerCase() ?? current.transport),
+            : ({
+                car: "private_car",
+                "private car": "private_car",
+                "public transport": "public_transport",
+                transit: "public_transport",
+                metro: "public_transport",
+                bus: "public_transport",
+                train: "public_transport",
+                walking: "walking",
+                walk: "walking",
+                "rental vehicle": "rental_vehicle",
+                rental_vehicle: "rental_vehicle",
+                auto: "auto",
+                "auto/taxi": "auto",
+                taxi: "auto",
+                cab: "auto",
+                motorbike: "auto",
+              }[preferences.transportation?.toLowerCase() ?? ""] ?? current.transport),
           pace: editedFields.current.has("pace")
             ? current.pace
             : preferences.travel_pace === "relaxed"
@@ -192,8 +280,10 @@ function Planner() {
       const outboundCost = form.outboundCost.trim() ? Number(form.outboundCost) : null;
       const returnCost = form.returnCost.trim() ? Number(form.returnCost) : null;
       if (
-        (outboundCost !== null && (!Number.isFinite(outboundCost) || outboundCost < 0)) ||
-        (returnCost !== null && (!Number.isFinite(returnCost) || returnCost < 0))
+        (outboundCost !== null &&
+          (!Number.isFinite(outboundCost) || outboundCost < 0 || outboundCost > 5_000_000)) ||
+        (returnCost !== null &&
+          (!Number.isFinite(returnCost) || returnCost < 0 || returnCost > 5_000_000))
       ) {
         throw new Error("Enter a valid non-negative cost for each known intercity leg.");
       }
@@ -325,7 +415,11 @@ function Planner() {
                     <Input
                       id="from"
                       value={form.from}
-                      onChange={(e) => setForm({ ...form, from: e.target.value })}
+                      onChange={(e) => {
+                        setTransportEstimate(null);
+                        setForm({ ...form, from: e.target.value });
+                      }}
+                      onBlur={() => void refreshTransportEstimate()}
                     />
                   </div>
                   <div className="space-y-2">
@@ -333,17 +427,12 @@ function Planner() {
                     <Input
                       id="to"
                       value={form.to}
-                      onChange={(e) => setForm({ ...form, to: e.target.value })}
+                      onChange={(e) => {
+                        setTransportEstimate(null);
+                        setForm({ ...form, to: e.target.value });
+                      }}
+                      onBlur={() => void refreshTransportEstimate()}
                     />
-                    {form.from.trim() &&
-                      form.to.trim() &&
-                      form.from.trim().toLowerCase() !== form.to.trim().toLowerCase() && (
-                        <p className="text-xs text-muted-foreground">
-                          {form.from.trim()} to {form.to.trim()} intercity travel is not routed or
-                          included in this estimate; the itinerary covers activities within{" "}
-                          {form.to.trim()}.
-                        </p>
-                      )}
                   </div>
                 </div>
                 <div className="space-y-2">
@@ -361,7 +450,7 @@ function Planner() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label>Transportation</Label>
+                  <Label>Local transportation</Label>
                   <Select
                     value={form.transport}
                     onValueChange={(v) => {
@@ -373,74 +462,170 @@ function Planner() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="car">Private car</SelectItem>
-                      <SelectItem value="train">Train</SelectItem>
-                      <SelectItem value="flight">Flights</SelectItem>
-                      <SelectItem value="bus">Bus</SelectItem>
+                      <SelectItem value="private_car">Private car</SelectItem>
+                      <SelectItem value="walking">Walking</SelectItem>
+                      <SelectItem value="public_transport">Public transport</SelectItem>
+                      <SelectItem value="auto">Auto / Taxi</SelectItem>
+                      <SelectItem value="rental_vehicle">Rental vehicle</SelectItem>
                       <SelectItem value="mixed">Mixed</SelectItem>
                     </SelectContent>
                   </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Covers movement within the destination city only.
+                  </p>
                 </div>
                 <div className="space-y-3 rounded-xl border border-border p-4">
                   <div>
                     <h3 className="text-sm font-semibold">Intercity transportation</h3>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      Optional outbound and return estimates. Entered amounts are your estimates,
-                      not quoted fares; leave a leg blank if its cost is unknown.
+                      Whole-group travel costs between these cities. Estimates are assumptions, not
+                      live fares. Blur a city field to refresh.
                     </p>
                   </div>
                   <div className="space-y-2">
                     <Label>Intercity mode (optional)</Label>
                     <Select
                       value={form.intercityTransport || "unspecified"}
-                      onValueChange={(value) =>
+                      onValueChange={(value) => {
+                        const mode = value === "unspecified" ? null : value;
                         setForm({
                           ...form,
-                          intercityTransport: value === "unspecified" ? "" : value,
-                        })
-                      }
+                          intercityTransport: mode ?? "",
+                        });
+                        void refreshTransportEstimate({ mode });
+                      }}
                     >
                       <SelectTrigger>
                         <SelectValue placeholder="Choose a mode" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="unspecified">Not selected</SelectItem>
+                        <SelectItem value="unspecified">Not decided · provisional range</SelectItem>
                         <SelectItem value="train">Train</SelectItem>
                         <SelectItem value="bus">Bus</SelectItem>
                         <SelectItem value="flight">Flight</SelectItem>
-                        <SelectItem value="car">Car</SelectItem>
-                        <SelectItem value="mixed">Mixed</SelectItem>
+                        <SelectItem value="private_car">Private car</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <div className="space-y-2">
-                      <Label htmlFor="intercity-outbound-cost">Outbound estimate (INR)</Label>
+                      <Label htmlFor="intercity-outbound-cost">
+                        Outbound cost · whole group (INR)
+                      </Label>
                       <Input
                         id="intercity-outbound-cost"
                         type="number"
                         min="0"
+                        max="5000000"
                         step="1"
                         inputMode="decimal"
-                        placeholder="Leave blank if unknown"
+                        placeholder="Optional manual override"
                         value={form.outboundCost}
                         onChange={(event) => setForm({ ...form, outboundCost: event.target.value })}
                       />
+                      {manualTransportationWarning(
+                        form.outboundCost,
+                        transportEstimate?.outbound,
+                      ) && (
+                        <p className="text-xs text-amber-700 dark:text-amber-300" role="status">
+                          {manualTransportationWarning(
+                            form.outboundCost,
+                            transportEstimate?.outbound,
+                          )}
+                        </p>
+                      )}
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="intercity-return-cost">Return estimate (INR)</Label>
+                      <Label htmlFor="intercity-return-cost">Return cost · whole group (INR)</Label>
                       <Input
                         id="intercity-return-cost"
                         type="number"
                         min="0"
+                        max="5000000"
                         step="1"
                         inputMode="decimal"
-                        placeholder="Leave blank if unknown"
+                        placeholder="Optional manual override"
                         value={form.returnCost}
                         onChange={(event) => setForm({ ...form, returnCost: event.target.value })}
                       />
+                      {manualTransportationWarning(form.returnCost, transportEstimate?.return) && (
+                        <p className="text-xs text-amber-700 dark:text-amber-300" role="status">
+                          {manualTransportationWarning(form.returnCost, transportEstimate?.return)}
+                        </p>
+                      )}
                     </div>
                   </div>
+                  {transportEstimateLoading && (
+                    <p className="text-xs text-muted-foreground">Estimating route costs…</p>
+                  )}
+                  {transportEstimateError && (
+                    <p role="status" className="text-xs text-amber-700 dark:text-amber-300">
+                      {transportEstimateError}
+                    </p>
+                  )}
+                  {transportEstimate && (
+                    <div
+                      className="grid gap-2 rounded-lg bg-muted/50 p-3 text-sm sm:grid-cols-2"
+                      aria-label="Indicative intercity estimates"
+                    >
+                      {transportEstimate.origin?.display_name &&
+                        transportEstimate.destination?.display_name && (
+                          <p className="text-xs text-muted-foreground sm:col-span-2">
+                            Route resolved as {transportEstimate.origin.display_name} →{" "}
+                            {transportEstimate.destination.display_name}
+                          </p>
+                        )}
+                      {(["outbound", "return"] as const).map((direction) => {
+                        const cost = transportEstimate[direction];
+                        return (
+                          <div key={direction}>
+                            <p className="text-xs font-medium capitalize text-muted-foreground">
+                              {direction} · {cost.mode ?? "mode not decided"}
+                            </p>
+                            {cost.status === "estimated" && typeof cost.amount === "number" ? (
+                              <p className="font-semibold">
+                                ₹{cost.amount.toLocaleString("en-IN")} representative
+                              </p>
+                            ) : (
+                              <p className="font-medium">Estimate unavailable</p>
+                            )}
+                            {typeof cost.range_min === "number" &&
+                              typeof cost.range_max === "number" && (
+                                <p className="text-xs text-muted-foreground">
+                                  Indicative range ₹{cost.range_min.toLocaleString("en-IN")}–₹
+                                  {cost.range_max.toLocaleString("en-IN")} · whole group
+                                </p>
+                              )}
+                            {cost.unit_basis && (
+                              <p className="text-xs text-muted-foreground">
+                                Rate basis: {cost.unit_basis.replaceAll("_", " ")} · amount is for
+                                the whole group ({cost.traveler_count ?? form.travellers}{" "}
+                                traveler(s))
+                              </p>
+                            )}
+                            {cost.assumptions.slice(0, 2).map((assumption) => (
+                              <p className="mt-1 text-xs text-muted-foreground" key={assumption}>
+                                {assumption}
+                              </p>
+                            ))}
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {form[direction === "outbound" ? "outboundCost" : "returnCost"].trim()
+                                ? "Your manual amount takes priority."
+                                : "Optional: enter your whole-group cost to override."}
+                            </p>
+                          </div>
+                        );
+                      })}
+                      <p className="text-xs text-muted-foreground sm:col-span-2">
+                        {transportEstimate.distance_basis === "osrm_road_route"
+                          ? "Private-car range uses an OSRM road route."
+                          : "Road distances for car, bus and rail remain route approximations."}
+                        {transportEstimate.attribution
+                          ? ` Geocoding: ${transportEstimate.attribution}.`
+                          : ""}
+                      </p>
+                    </div>
+                  )}
                 </div>
               </>
             )}
@@ -493,7 +678,11 @@ function Planner() {
                     max={12}
                     step={1}
                     value={[form.travellers]}
-                    onValueChange={([v]) => setForm({ ...form, travellers: v ?? form.travellers })}
+                    onValueChange={([v]) => {
+                      const travelers = v ?? form.travellers;
+                      setForm({ ...form, travellers: travelers });
+                      if (transportEstimate) void refreshTransportEstimate({ travelers });
+                    }}
                   />
                 </div>
                 <div className="space-y-2">

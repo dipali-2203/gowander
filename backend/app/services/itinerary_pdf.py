@@ -161,18 +161,35 @@ def _document_lines(trip: Any) -> list[tuple[str, str]]:
                 lines.append(("body", f"{label}: {value} ({status})"))
                 if category.get("source"):
                     lines.append(("small", f"Source: {category['source']}"))
+                if isinstance(category.get("range_min"), (int, float)) and isinstance(category.get("range_max"), (int, float)):
+                    lines.append(("small", f"Indicative range: {_inr(category['range_min'])}–{_inr(category['range_max'])}"))
+                if category.get("mode"):
+                    lines.append(("small", f"Mode: {str(category['mode']).replace('_', ' ')}"))
+                if category.get("unit_basis"):
+                    basis = str(category["unit_basis"]).replace("_", " ")
+                    travelers = category.get("traveler_count")
+                    lines.append(("small", f"Pricing basis: {basis}" + (f"; {travelers} traveler(s)" if travelers else "")))
+                if category.get("amount_basis"):
+                    lines.append(("small", f"Amount basis: {str(category['amount_basis']).replace('_', ' ')}"))
+                if isinstance(category.get("distance_km"), (int, float)):
+                    lines.append(("small", f"Modeled distance: {category['distance_km']:.1f} km"))
+                if category.get("estimated_at"):
+                    lines.append(("small", f"Estimate created: {category['estimated_at']}"))
                 for assumption in category.get("assumptions", []) or []:
                     lines.append(("small", f"Assumption: {assumption}"))
             total = complete.get("total_estimate")
             lines.append(("body", f"Complete trip total: {_inr(total)}"))
+            if isinstance(complete.get("total_estimate_range_min"), (int, float)) and isinstance(complete.get("total_estimate_range_max"), (int, float)):
+                lines.append(("small", f"Indicative total range: {_inr(complete['total_estimate_range_min'])}–{_inr(complete['total_estimate_range_max'])}; budget checks use the upper bounds."))
             if total is None:
                 lines.append(("small", "The budget is incomplete; unknown costs are not counted as zero."))
             elif complete.get("within_budget") is True:
-                lines.append(("body", "Budget status: Within budget estimate"))
+                lines.append(("body", "Budget status: Within budget across the estimated ranges"))
             elif complete.get("within_budget") is False:
                 limit = complete.get("budget_limit")
-                overrun = total - limit if isinstance(limit, (int, float)) else None
-                lines.append(("body", f"Budget status: Over budget by {_inr(max(0, overrun))}" if overrun is not None else "Budget status: Over budget"))
+                upper = complete.get("total_estimate_range_max")
+                overrun = upper - limit if isinstance(limit, (int, float)) and isinstance(upper, (int, float)) else None
+                lines.append(("body", f"Budget status: Over the budget at the upper estimate by {_inr(max(0, overrun))}" if overrun is not None else "Budget status: Over the budget at the upper estimate"))
             else:
                 lines.append(("body", "Budget feasibility cannot be fully determined."))
             for assumption in complete.get("assumptions", []) or []:

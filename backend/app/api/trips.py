@@ -24,6 +24,7 @@ from app.schemas import (
     Preferences,
     TripCreate,
     TripUpdate,
+    TransportationEstimateRequest,
     ReplanRequest,
     ReplanResponse,
     ScenarioReplanRequest,
@@ -39,6 +40,12 @@ from app.services.risk import calculate_attraction_risk, simulate_completion_pro
 from app.services.conditions import estimated_conditions
 from app.services.annealing import generate_annealed_itinerary
 from app.services.budget import attraction_budget_after_fixed_costs, estimate_trip_budget
+from app.services.transportation_estimator import (
+    estimate_intercity_transport,
+    intercity_cost_record,
+    manual_cost_record,
+    validate_manual_amount,
+)
 from app.schemas import CompletedActivitiesRequest, WeatherReplanRequest, WeatherProposalAction
 from app.services.weather import WeatherProviderError
 from app.services.weather_replanning import build_weather_proposal
@@ -108,6 +115,94 @@ def _budget_allocation_warnings(trip: Trip, allocation: float | None = None) -> 
     return warnings
 
 
+def _canonical_intercity_mode(value: str | None) -> str | None:
+    mode = (value or "").strip().lower().replace("-", "_")
+    if mode in {"", "not_decided", "not decided", "unspecified"}:
+        return None
+    if mode == "mixed":
+        raise HTTPException(status_code=422, detail="Choose one intercity mode or leave it undecided; mixed legs are not modeled.")
+    if mode in {"car", "private car", "private_car"}:
+        return "private_car"
+    if mode in {"train", "bus", "flight"}:
+        return mode
+    raise HTTPException(status_code=422, detail="Choose train, bus, flight, private car, or leave intercity mode undecided.")
+
+
+def _prepare_intercity_options(
+    options: dict,
+    *,
+    origin: str,
+    destination: str,
+    origin_latitude: float | None,
+    origin_longitude: float | None,
+    destination_latitude: float | None = None,
+    destination_longitude: float | None = None,
+    route_source: str | None = None,
+    route_attribution: str | None = None,
+) -> tuple[dict, dict]:
+    mode = _canonical_intercity_mode(options.get("intercity_transportation_mode"))
+    travelers = int(options.get("traveler_count") or 1)
+    if origin_latitude is not None and origin_longitude is not None and destination_latitude is not None and destination_longitude is not None:
+        route = estimate_intercity_transport(
+            origin=origin, destination=destination, travelers=travelers, mode=mode,
+            origin_latitude=origin_latitude, origin_longitude=origin_longitude,
+            destination_latitude=destination_latitude, destination_longitude=destination_longitude,
+        )
+    else:
+        unavailable = {"status": "unavailable", "amount": None, "mode": mode, "assumptions": ["A resolved origin and intercity destination coordinate pair is required; no city or itinerary coordinates were assumed."]}
+        route = {"origin": None, "destination": None, "outbound": dict(unavailable), "return": dict(unavailable)}
+    if route_source:
+        for direction in ("outbound", "return"):
+            route[direction]["assumptions"] = [*route[direction].get("assumptions", []), f"Route coordinate source: {route_source}."]
+            if route_attribution:
+                route[direction]["assumptions"].append(f"Attribution: {route_attribution}.")
+    options["intercity_transportation_mode"] = mode
+    for direction in ("outbound", "return"):
+        key = f"intercity_{direction}_cost"
+        incoming = options.get(key) or {}
+        estimate = route[direction]
+        if incoming.get("status") == "user_provided" and incoming.get("amount") is not None:
+            if float(incoming["amount"]) == 0 and not incoming.get("zero_fare_confirmed"):
+                raise HTTPException(status_code=422, detail="Confirm that this transportation leg is genuinely free before saving zero.")
+            if str(incoming.get("currency") or "INR").upper() != "INR":
+                assumptions = list(incoming.get("assumptions") or [])
+                assumptions.append("This manual amount is not INR and is excluded from INR totals because no currency conversion is configured.")
+                incoming["assumptions"] = assumptions
+                options[key] = incoming
+                continue
+            try:
+                options[key] = manual_cost_record(
+                    float(incoming["amount"]), estimate,
+                    zero_fare_confirmed=bool(incoming.get("zero_fare_confirmed")),
+                    override_confirmed=bool(incoming.get("override_confirmed")),
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+        else:
+            options[key] = intercity_cost_record(estimate)
+    return options, route
+
+
+@router.post("/transportation-estimate")
+def preview_transportation_estimate(request: TransportationEstimateRequest):
+    """Preview route-based estimates and validate optional whole-group overrides."""
+    mode = request.intercity_mode
+    route = estimate_intercity_transport(
+        origin=request.origin, destination=request.destination, travelers=request.traveler_count,
+        mode=mode, origin_latitude=request.origin_latitude, origin_longitude=request.origin_longitude,
+        destination_latitude=request.destination_latitude, destination_longitude=request.destination_longitude,
+    )
+    validations = {}
+    for direction, amount, zero_confirmed, override_confirmed in (
+        ("outbound", request.outbound_amount, request.outbound_zero_fare_confirmed, request.outbound_override_confirmed),
+        ("return", request.return_amount, request.return_zero_fare_confirmed, request.return_override_confirmed),
+    ):
+        validations[direction] = validate_manual_amount(
+            amount, route[direction], zero_fare_confirmed=zero_confirmed, override_confirmed=override_confirmed,
+        ) if amount is not None else {"confirmation_required": False, "warning": None}
+    return {**route, "manual_validation": validations}
+
+
 def _build_saved_multiday_plan(trip: Trip, request: MultiDayOptimizeRequest):
     def generate(attraction_budget: float):
         return generate_multiday_greedy(
@@ -131,9 +226,12 @@ def _build_saved_multiday_plan(trip: Trip, request: MultiDayOptimizeRequest):
     estimate = estimate_trip_budget(
         trip=trip, days=result["days"], attractions=request.attractions, data_source=request.data_source,
     )
-    transport_amount = next(
-        (item["amount"] for item in estimate["categories"] if item["key"] == "transportation"), 0.0,
+    local_category = next(
+        (item for item in estimate["complete_budget"]["categories"] if item["key"] == "local_transport"), None,
     )
+    transport_amount = 0.0
+    if local_category and local_category.get("status") == "estimated":
+        transport_amount = float(local_category.get("range_max") or local_category.get("amount") or 0.0)
     adjusted_allocation = max(0.0, allocation - transport_amount)
     if adjusted_allocation < allocation and result["total_cost"] > adjusted_allocation:
         result = generate(adjusted_allocation)
@@ -149,11 +247,22 @@ def _build_saved_multiday_plan(trip: Trip, request: MultiDayOptimizeRequest):
         result["warnings"].append(
             f"Estimated complete-trip costs exceed the budget by ₹{abs(complete_budget['remaining_budget']):,.0f}; review the fallback assumptions or adjust trip inputs."
         )
+        representative_total = complete_budget.get("total_estimate")
+        if isinstance(representative_total, (int, float)) and representative_total > trip.budget:
+            result["warnings"].append(
+                f"Representative complete-trip costs exceed the budget by ₹{representative_total - trip.budget:,.0f}; the feasibility check also includes the upper estimate range."
+            )
     elif complete_fit is None and not estimate["within_budget"]:
         result["feasible"] = False
         result["warnings"].append(
             f"The destination-only estimate exceeds the budget by ₹{abs(estimate['remaining_budget']):,.0f}; complete-trip budget fit is unavailable because some costs are unknown."
         )
+    if complete_fit is None:
+        result["warnings"].append(
+            "Complete-trip budget fit is uncertain because at least one required cost is unavailable; the itinerary budget does not count that cost as free."
+        )
+    if local_category and local_category.get("status") == "unavailable":
+        result["warnings"].append("Local transportation cost is unavailable for this mode or route; budget feasibility may be incomplete.")
     if allocation <= 0:
         result["feasible"] = False
     scheduled_ids = {stop.attraction_id for day in result["days"] for stop in day["stops"]}
@@ -221,12 +330,22 @@ def create_trip(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    planning_options, resolved_route = _prepare_intercity_options(
+        request.planning_options.model_dump(mode="json"), origin=request.origin,
+        destination=request.destination,
+        origin_latitude=request.origin_latitude, origin_longitude=request.origin_longitude,
+        destination_latitude=request.intercity_destination_latitude,
+        destination_longitude=request.intercity_destination_longitude,
+        route_source=request.intercity_route_source,
+        route_attribution=request.intercity_route_attribution,
+    )
+    resolved_origin = resolved_route.get("origin") or {}
     trip = Trip(
         owner_user_id=user.id,
         name=(request.name or request.destination).strip(),
         origin=request.origin.strip(),
-        origin_latitude=request.origin_latitude,
-        origin_longitude=request.origin_longitude,
+        origin_latitude=request.origin_latitude if request.origin_latitude is not None else resolved_origin.get("latitude"),
+        origin_longitude=request.origin_longitude if request.origin_longitude is not None else resolved_origin.get("longitude"),
         origin_place_id=request.origin_place_id,
         destination=request.destination,
         start_date=request.start_date,
@@ -236,7 +355,7 @@ def create_trip(
         start_latitude=request.start_latitude,
         start_longitude=request.start_longitude,
         preferences=request.preferences.model_dump(),
-        planning_options=request.planning_options.model_dump(),
+        planning_options=planning_options,
     )
 
     db.add(trip)
@@ -350,6 +469,7 @@ def update_trip(trip_id: int, request: TripUpdate, db: Session = Depends(get_db)
     if trip is None:
         raise HTTPException(status_code=404, detail="Trip not found")
     changes = request.model_dump(exclude_unset=True)
+    old_origin = trip.origin
     itinerary_inputs = {
         "origin", "destination", "start_date", "end_date", "budget",
         "available_minutes_per_day", "start_latitude", "start_longitude",
@@ -362,7 +482,31 @@ def update_trip(trip_id: int, request: TripUpdate, db: Session = Depends(get_db)
         # Preserve intercity inputs when older clients omit those new fields.
         merged_options = dict(trip.planning_options or {})
         merged_options.update(request.planning_options.model_dump(exclude_unset=True))
+        explicitly_changed = request.planning_options.model_fields_set
+        for direction in ("outbound", "return"):
+            field = f"intercity_{direction}_cost"
+            if field not in explicitly_changed:
+                continue
+            cost = merged_options.get(field) or {}
+            if cost.get("status") != "user_provided" or cost.get("amount") is None:
+                continue
+            amount = float(cost["amount"])
+            if amount == 0 and not cost.get("zero_fare_confirmed"):
+                raise HTTPException(status_code=422, detail="Confirm that this transportation leg is genuinely free before saving zero.")
+            if str(cost.get("currency") or "INR").upper() == "INR":
+                validation = validate_manual_amount(
+                    amount, cost,
+                    zero_fare_confirmed=bool(cost.get("zero_fare_confirmed")),
+                    override_confirmed=bool(cost.get("override_confirmed")),
+                )
+                if validation["confirmation_required"]:
+                    raise HTTPException(status_code=422, detail=validation["warning"])
         changes["planning_options"] = merged_options
+    if "origin" in changes and changes["origin"] != old_origin and "origin_latitude" not in changes:
+        # Coordinates belong to a particular origin label; never carry them over
+        # to a newly typed city.
+        changes["origin_latitude"] = None
+        changes["origin_longitude"] = None
     start_date = changes.get("start_date", trip.start_date)
     end_date = changes.get("end_date", trip.end_date)
     if end_date < start_date:
@@ -374,6 +518,29 @@ def update_trip(trip_id: int, request: TripUpdate, db: Session = Depends(get_db)
     for key, value in changes.items():
         if value is not None or key in {"origin_latitude", "origin_longitude", "origin_place_id"}:
             setattr(trip, key, value)
+    effective_options = dict(trip.planning_options or {})
+    changed_options = changes.get("planning_options") or {}
+    estimate_inputs_changed = (
+        "origin" in changes or "destination" in changes or "origin_latitude" in changes or "origin_longitude" in changes
+        or any(key in changed_options for key in ("traveler_count", "intercity_transportation_mode"))
+    )
+    if estimate_inputs_changed:
+        for direction in ("outbound", "return"):
+            key = f"intercity_{direction}_cost"
+            cost = effective_options.get(key)
+            if not isinstance(cost, dict):
+                continue
+            if cost.get("status") == "estimated":
+                effective_options[key] = {
+                    "amount": None, "currency": cost.get("currency", "INR"), "status": "unavailable",
+                    "source": None, "assumptions": ["Route, traveler count, or intercity mode changed; the previous automatic estimate was invalidated."],
+                }
+            elif cost.get("status") == "user_provided":
+                assumptions = list(cost.get("assumptions") or [])
+                assumptions.append("Trip route, traveler count, or mode changed; review this retained manual whole-group amount.")
+                cost.update({"assumptions": assumptions, "range_min": None, "range_max": None, "distance_km": None})
+                effective_options[key] = cost
+        trip.planning_options = effective_options
     if itinerary_inputs.intersection(changes):
         trip.itinerary_stale = True
         trip.itinerary_revision += 1

@@ -27,6 +27,25 @@ function clock(minute: number) {
   return `${String(Math.floor(minute / 60) % 24).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
 }
 
+function localTransportSelection(value: string) {
+  const mode = value.trim().toLowerCase().replaceAll("-", "_");
+  const legacy: Record<string, string> = {
+    car: "private_car",
+    "private car": "private_car",
+    taxi: "auto",
+    cab: "auto",
+    motorbike: "auto",
+    bus: "public_transport",
+    train: "public_transport",
+    transit: "public_transport",
+    metro: "public_transport",
+    "public transport": "public_transport",
+    flights: "flight",
+    "rental vehicle": "rental_vehicle",
+  };
+  return legacy[mode] ?? (mode === "walking" || mode === "walk" ? "walking" : mode);
+}
+
 function TripDetailsPage() {
   const { tripId: rawTripId } = Route.useParams();
   const { edit } = Route.useSearch();
@@ -69,7 +88,7 @@ function TripDetailsPage() {
         endDate: saved.end_date,
         budget: String(saved.budget),
         travelers: String(saved.planning_options.traveler_count),
-        transport: saved.planning_options.transportation_mode,
+        transport: localTransportSelection(saved.planning_options.transportation_mode),
         accommodation: saved.planning_options.accommodation_category,
         mealPreferences: saved.planning_options.meal_preferences.join(", "),
         miscellaneous: String(saved.planning_options.miscellaneous_budget),
@@ -355,27 +374,27 @@ function TripDetailsPage() {
               />
             </label>
             <label className="space-y-1 text-sm">
-              Transportation
+              Local transportation
               <select
                 className="w-full rounded-md border border-input bg-background px-3 py-2"
                 value={form.transport}
                 onChange={(event) => setForm({ ...form, transport: event.target.value })}
               >
-                {[
-                  "walking",
-                  "public transport",
-                  "bus",
-                  "train",
-                  "taxi",
-                  "car",
-                  "rental vehicle",
-                  "mixed",
-                ].map((mode) => (
-                  <option key={mode} value={mode}>
-                    {mode}
+                <option value="walking">Walking</option>
+                <option value="public_transport">Public transport</option>
+                <option value="auto">Auto / Taxi</option>
+                <option value="private_car">Private car</option>
+                <option value="rental_vehicle">Rental vehicle</option>
+                <option value="mixed">Mixed</option>
+                {form.transport === "flight" && (
+                  <option value="flight" disabled>
+                    Legacy saved mode: flight · choose a local mode
                   </option>
-                ))}
+                )}
               </select>
+              <span className="text-xs text-muted-foreground">
+                Movement within the destination city.
+              </span>
             </label>
             <label className="space-y-1 text-sm">
               Accommodation category
@@ -436,7 +455,20 @@ function TripDetailsPage() {
         <Summary label="Dates" value={`${trip.start_date} – ${trip.end_date}`} />
         <Summary label="Travelers" value={String(trip.planning_options.traveler_count)} />
         <Summary label="Trip budget" value={`₹${trip.budget.toLocaleString("en-IN")}`} />
-        <Summary label="Transportation" value={trip.planning_options.transportation_mode} />
+        <Summary
+          label="Local transportation"
+          value={localTransportSelection(trip.planning_options.transportation_mode).replaceAll(
+            "_",
+            " ",
+          )}
+        />
+        <Summary
+          label="Intercity transportation"
+          value={
+            trip.planning_options.intercity_transportation_mode?.replaceAll("_", " ") ||
+            "Not decided"
+          }
+        />
         <Summary
           label="Accommodation preference"
           value={trip.planning_options.accommodation_category}
@@ -689,7 +721,7 @@ function TripDetailsPage() {
         />
         <UnavailableCard
           title="Transport and total cost"
-          detail="When available, the budget uses configurable local fare estimates plus hotel and meal allowances. Intercity fares and live prices are unavailable; inspect the assumptions in the budget breakdown."
+          detail="Local and intercity transport use configurable indicative estimates when route data is available. They are not live fares or booking prices; inspect ranges and assumptions in the budget breakdown."
         />
       </section>
     </div>
