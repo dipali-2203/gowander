@@ -17,12 +17,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import {
-  createAndOptimizeTrip,
-  getAttractionCatalog,
-  getTravelPreferences,
-  type AttractionCatalog,
-} from "@/lib/api";
+import { createAndOptimizeTrip, getAttractionCatalog, getTravelPreferences } from "@/lib/api";
 import { useTripStore } from "@/store/trip";
 import { toast } from "sonner";
 
@@ -75,8 +70,6 @@ function Planner() {
   const [step, setStep] = useState(0);
   const [generating, setGenerating] = useState(false);
   const [phase, setPhase] = useState(0);
-  const [catalog, setCatalog] = useState<AttractionCatalog | null>(null);
-  const [catalogLoading, setCatalogLoading] = useState(false);
   const setGenerated = useTripStore((state) => state.setGenerated);
   const [form, setForm] = useState({
     from: "Delhi",
@@ -96,6 +89,13 @@ function Planner() {
     pace: [0.5],
     picks: [] as string[],
   });
+
+  useEffect(() => {
+    const destination = form.to.trim();
+    if (destination) {
+      void getAttractionCatalog(destination).catch(() => undefined);
+    }
+  }, [form.to]);
 
   useEffect(() => {
     let active = true;
@@ -143,29 +143,6 @@ function Planner() {
       active = false;
     };
   }, []);
-
-  useEffect(() => {
-    let active = true;
-    const destination = form.to.trim();
-    if (!destination) {
-      setCatalog(null);
-      return;
-    }
-    setCatalogLoading(true);
-    getAttractionCatalog(destination)
-      .then((value) => {
-        if (active) setCatalog(value);
-      })
-      .catch(() => {
-        if (active) setCatalog(null);
-      })
-      .finally(() => {
-        if (active) setCatalogLoading(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, [form.to]);
 
   useEffect(() => {
     if (!generating) return;
@@ -335,10 +312,6 @@ function Planner() {
                       value={form.to}
                       onChange={(e) => setForm({ ...form, to: e.target.value })}
                     />
-                    <p className="text-xs text-muted-foreground">
-                      Attraction details load from the local catalog. Unknown fees and hours stay
-                      visibly unverified.
-                    </p>
                     {form.from.trim() &&
                       form.to.trim() &&
                       form.from.trim().toLowerCase() !== form.to.trim().toLowerCase() && (
@@ -348,43 +321,6 @@ function Planner() {
                           {form.to.trim()}.
                         </p>
                       )}
-                    {catalogLoading ? (
-                      <p className="text-xs text-muted-foreground">Loading attraction catalog…</p>
-                    ) : catalog ? (
-                      <div className="rounded-lg border p-3 text-xs">
-                        <p className="font-medium">
-                          {catalog.attractions.length} attractions ·{" "}
-                          {catalog.data_source === "osm"
-                            ? "OpenStreetMap"
-                            : catalog.data_source === "synthetic"
-                              ? "Synthetic development data"
-                              : catalog.data_source}
-                        </p>
-                        {catalog.message && (
-                          <p className="mt-1 text-amber-700">{catalog.message}</p>
-                        )}
-                        {catalog.attribution && (
-                          <p className="mt-1 text-muted-foreground">{catalog.attribution}</p>
-                        )}
-                        <ul className="mt-2 max-h-36 space-y-1 overflow-auto">
-                          {catalog.attractions.slice(0, 8).map((place) => (
-                            <li key={place.id} className="flex flex-wrap justify-between gap-x-3">
-                              <span>
-                                {place.name} · {place.catalog_category ?? place.category}
-                              </span>
-                              <span className="text-muted-foreground">
-                                {place.cost_known ? `₹${place.cost}` : "Fee unknown"} ·{" "}
-                                {place.opening_hours ?? "Hours unknown"}
-                              </span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    ) : (
-                      <p className="text-xs text-muted-foreground">
-                        No catalog is available for this destination.
-                      </p>
-                    )}
                   </div>
                 </div>
                 <div className="space-y-2">
