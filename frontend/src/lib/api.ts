@@ -1,4 +1,5 @@
 import { readableErrorMessage } from "./error-message.js";
+import { boostBookmarkedAttractions } from "@/lib/personalization";
 
 export type AttractionInput = {
   id: string;
@@ -927,17 +928,19 @@ export async function createAndOptimizeTrip(input: {
     transport: string;
   };
 }): Promise<PlanningResult> {
-  const catalog = await request<{
-    attractions: AttractionInput[];
-    data_source: "osm" | "synthetic" | "user_supplied" | "mixed" | "unavailable";
-    catalog_status: AttractionCatalog["catalog_status"];
-    message: string | null;
-    start_location: [number, number] | null;
-  }>(`/api/v1/attractions/catalog/${encodeURIComponent(input.destination)}`);
+  const catalog = await getAttractionCatalog(input.destination);
   if (catalog.attractions.length === 0) {
     throw new Error(
       catalog.message ?? `No attraction catalog is available for ${input.destination} yet.`,
     );
+  }
+  let attractions = catalog.attractions;
+  try {
+    const bookmarks = await getBookmarks();
+    const bookmarkedIds = new Set(bookmarks.items.map((item) => item.destination_id));
+    attractions = boostBookmarkedAttractions(attractions, bookmarkedIds);
+  } catch {
+    // Personalization is optional; catalog planning remains available if bookmarks cannot load.
   }
   const [startLatitude, startLongitude] = catalog.start_location ?? [26.9124, 75.7873];
 
@@ -1021,7 +1024,7 @@ export async function createAndOptimizeTrip(input: {
     {
       method: "POST",
       body: JSON.stringify({
-        attractions: catalog.attractions,
+        attractions,
         algorithm: "greedy",
         data_source: catalog.data_source === "mixed" ? "user_supplied" : catalog.data_source,
         meal_breaks: [{ start_minute: 780, duration_minutes: 60 }],
@@ -1034,7 +1037,7 @@ export async function createAndOptimizeTrip(input: {
     {
       method: "POST",
       body: JSON.stringify({
-        attractions: catalog.attractions,
+        attractions,
         algorithm: "nsga2",
         seed: 42,
         max_alternatives: 3,
@@ -1044,7 +1047,7 @@ export async function createAndOptimizeTrip(input: {
   const annealing = await request<PlanningResult["annealing"]>(`/api/v1/trips/${trip.id}/anneal`, {
     method: "POST",
     body: JSON.stringify({
-      attractions: catalog.attractions,
+      attractions,
       algorithm: "simulated_annealing",
       seed: 42,
     }),
@@ -1052,7 +1055,7 @@ export async function createAndOptimizeTrip(input: {
   return {
     itinerary,
     alternatives: pareto.alternatives,
-    attractions: catalog.attractions,
+    attractions,
     startLocation: [startLatitude, startLongitude],
     budget: input.budget,
     annealing,

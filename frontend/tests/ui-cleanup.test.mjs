@@ -32,7 +32,7 @@ test("planner has no attraction preview while itinerary generation still loads t
   assert.match(api, /export function getAttractionCatalog\(destination: string\)/);
   assert.match(
     api,
-    /export async function createAndOptimizeTrip[\s\S]*const catalog = await request/,
+    /export async function createAndOptimizeTrip[\s\S]*const catalog = await getAttractionCatalog/,
   );
   assert.match(api, /\/api\/v1\/attractions\/catalog/);
 });

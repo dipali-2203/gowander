@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Search, Sparkles, X, Plus, Bookmark, BookmarkCheck } from "lucide-react";
 import { toast } from "sonner";
@@ -28,6 +28,14 @@ import {
 } from "@/lib/api";
 
 export const Route = createFileRoute("/app/explore")({
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { destination?: string; attractionId?: string } => ({
+    ...(typeof search["destination"] === "string"
+      ? { destination: search["destination"].toLowerCase() }
+      : {}),
+    ...(typeof search["attractionId"] === "string" ? { attractionId: search["attractionId"] } : {}),
+  }),
   head: () => ({
     meta: [
       { property: "og:type", content: "website" },
@@ -49,6 +57,8 @@ export const Route = createFileRoute("/app/explore")({
 });
 
 function Explore() {
+  const { destination: requestedDestination, attractionId: requestedAttractionId } =
+    Route.useSearch();
   const [query, setQuery] = useState("");
   const [state, setState] = useState("all");
   const [category, setCategory] = useState("all");
@@ -92,6 +102,15 @@ function Explore() {
       active = false;
     };
   }, [attractionCity]);
+
+  useEffect(() => {
+    if (requestedDestination === "jaipur" || requestedDestination === "udaipur") {
+      setAttractionCity(requestedDestination);
+      setBrowseAllPois(true);
+      setPoiQuery("");
+      setPoiCategory("All");
+    }
+  }, [requestedDestination]);
 
   const results = useMemo(
     () =>
@@ -208,17 +227,28 @@ function Explore() {
       ),
     [visiblePois],
   );
-  const selectPoi = (id: string) => {
-    setSelectedPoiId(id);
-    requestAnimationFrame(() => {
-      poiCardRefs.get(id)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    });
-  };
+  const selectPoi = useCallback(
+    (id: string) => {
+      setSelectedPoiId(id);
+      requestAnimationFrame(() => {
+        poiCardRefs.get(id)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      });
+    },
+    [poiCardRefs],
+  );
   useEffect(() => {
     if (selectedPoiId && !visiblePois.some((place) => place.id === selectedPoiId)) {
       setSelectedPoiId(null);
     }
   }, [selectedPoiId, visiblePois]);
+  useEffect(() => {
+    if (
+      requestedAttractionId &&
+      attractionCatalog?.attractions.some((place) => place.id === requestedAttractionId)
+    ) {
+      selectPoi(requestedAttractionId);
+    }
+  }, [requestedAttractionId, attractionCatalog, selectPoi]);
 
   return (
     <div className="space-y-5">

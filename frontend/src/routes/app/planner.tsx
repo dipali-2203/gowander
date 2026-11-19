@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Check, ChevronLeft, ChevronRight, Loader2, Sparkles } from "lucide-react";
 import { PageHeader } from "@/components/travel/PageHeader";
@@ -71,6 +71,7 @@ function Planner() {
   const [generating, setGenerating] = useState(false);
   const [phase, setPhase] = useState(0);
   const setGenerated = useTripStore((state) => state.setGenerated);
+  const editedFields = useRef(new Set<string>());
   const [form, setForm] = useState({
     from: "Delhi",
     to: "Jaipur",
@@ -114,26 +115,46 @@ function Planner() {
         const selected = preferences.interests
           .map((interest) => interestAliases[interest] ?? interest)
           .filter((interest) => interests.includes(interest));
+        const accommodationDefaults: Record<string, string> = {
+          hostel: "low",
+          "budget hotel": "low",
+        };
         setForm((current) => ({
           ...current,
-          picks: selected,
-          days: preferences.preferred_trip_duration_days ?? current.days,
-          budget: preferences.daily_budget_inr
-            ? [
-                preferences.daily_budget_inr *
-                  (preferences.preferred_trip_duration_days ?? current.days),
-              ]
-            : current.budget,
-          transport:
-            preferences.transportation?.toLowerCase() === "motorbike"
+          picks: editedFields.current.has("picks") ? current.picks : selected,
+          days: editedFields.current.has("days")
+            ? current.days
+            : (preferences.preferred_trip_duration_days ?? current.days),
+          budget:
+            editedFields.current.has("budget") ||
+            typeof preferences.daily_budget_inr !== "number" ||
+            preferences.daily_budget_inr <= 0
+              ? current.budget
+              : [
+                  preferences.daily_budget_inr *
+                    (editedFields.current.has("days")
+                      ? current.days
+                      : (preferences.preferred_trip_duration_days ?? current.days)),
+                ],
+          transport: editedFields.current.has("transport")
+            ? current.transport
+            : preferences.transportation?.toLowerCase() === "motorbike"
               ? "mixed"
               : (preferences.transportation?.toLowerCase() ?? current.transport),
-          pace:
-            preferences.travel_pace === "relaxed"
+          pace: editedFields.current.has("pace")
+            ? current.pace
+            : preferences.travel_pace === "relaxed"
               ? [0.25]
               : preferences.travel_pace === "fast"
                 ? [0.8]
-                : current.pace,
+                : preferences.travel_pace === null &&
+                    preferences.styles.some((style) => style.toLowerCase() === "slow travel")
+                  ? [0.25]
+                  : current.pace,
+          hotelBudget: editedFields.current.has("hotelBudget")
+            ? current.hotelBudget
+            : (accommodationDefaults[preferences.accommodation?.trim().toLowerCase() ?? ""] ??
+              current.hotelBudget),
         }));
       })
       .catch(() => {
@@ -157,11 +178,13 @@ function Planner() {
     return () => clearTimeout(t);
   }, [generating, phase, navigate]);
 
-  const toggleInterest = (i: string) =>
+  const toggleInterest = (i: string) => {
+    editedFields.current.add("picks");
     setForm((f) => ({
       ...f,
       picks: f.picks.includes(i) ? f.picks.filter((p) => p !== i) : [...f.picks, i],
     }));
+  };
 
   const generateItinerary = async () => {
     try {
@@ -331,14 +354,20 @@ function Planner() {
                     max={21}
                     step={1}
                     value={[form.days]}
-                    onValueChange={([v]) => setForm({ ...form, days: v ?? form.days })}
+                    onValueChange={([v]) => {
+                      editedFields.current.add("days");
+                      setForm({ ...form, days: v ?? form.days });
+                    }}
                   />
                 </div>
                 <div className="space-y-2">
                   <Label>Transportation</Label>
                   <Select
                     value={form.transport}
-                    onValueChange={(v) => setForm({ ...form, transport: v })}
+                    onValueChange={(v) => {
+                      editedFields.current.add("transport");
+                      setForm({ ...form, transport: v });
+                    }}
                   >
                     <SelectTrigger>
                       <SelectValue />
@@ -425,14 +454,20 @@ function Planner() {
                     max={300000}
                     step={5000}
                     value={form.budget}
-                    onValueChange={(v) => setForm({ ...form, budget: v })}
+                    onValueChange={(v) => {
+                      editedFields.current.add("budget");
+                      setForm({ ...form, budget: v });
+                    }}
                   />
                 </div>
                 <div className="space-y-2">
                   <Label>Hotel budget per night</Label>
                   <Select
                     value={form.hotelBudget}
-                    onValueChange={(v) => setForm({ ...form, hotelBudget: v })}
+                    onValueChange={(v) => {
+                      editedFields.current.add("hotelBudget");
+                      setForm({ ...form, hotelBudget: v });
+                    }}
                   >
                     <SelectTrigger>
                       <SelectValue />
@@ -547,7 +582,10 @@ function Planner() {
                       max={1}
                       step={0.1}
                       value={form.pace}
-                      onValueChange={(v) => setForm({ ...form, pace: v })}
+                      onValueChange={(v) => {
+                        editedFields.current.add("pace");
+                        setForm({ ...form, pace: v });
+                      }}
                     />
                   </div>
                 </div>
