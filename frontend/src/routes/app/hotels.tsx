@@ -4,7 +4,7 @@ import { BedDouble, ExternalLink, MapPin, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader, EmptyState } from "@/components/travel/PageHeader";
 import { HotelCard } from "@/components/travel/HotelCard";
-import { IndiaMap } from "@/components/travel/IndiaMap";
+import { HotelLocationMap, type HotelMapAttraction } from "@/components/travel/HotelLocationMap";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -15,12 +15,14 @@ import {
 } from "@/components/ui/dialog";
 import {
   getHotelRecommendations,
+  getAttractionCatalog,
   getUserTrips,
   removeTripAccommodation,
   selectTripAccommodation,
   type AccountTrip,
   type HotelRecommendation,
   type HotelRecommendations,
+  type AttractionCatalog,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -64,6 +66,9 @@ function Hotels() {
   const [detail, setDetail] = useState<HotelRecommendation | null>(null);
   const [savingHotelId, setSavingHotelId] = useState<string | null>(null);
   const [removing, setRemoving] = useState(false);
+  const [attractionCatalog, setAttractionCatalog] = useState<AttractionCatalog | null>(null);
+  const [activeHotelId, setActiveHotelId] = useState<string | null>(null);
+  const hotelCardRefs = useMemo(() => new Map<string, HTMLElement>(), []);
 
   useEffect(() => {
     let active = true;
@@ -149,6 +154,63 @@ function Hotels() {
 
   const currentTrip = trips.find((trip) => trip.id === selectedTripId);
   const selected = data?.selected_accommodation;
+
+  useEffect(() => {
+    let active = true;
+    setAttractionCatalog(null);
+    setActiveHotelId(null);
+    if (!currentTrip?.latest_itinerary) return;
+    getAttractionCatalog(currentTrip.destination)
+      .then((catalog) => {
+        if (active) setAttractionCatalog(catalog);
+      })
+      .catch(() => {
+        if (active) setAttractionCatalog(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [
+    currentTrip?.id,
+    currentTrip?.destination,
+    currentTrip?.itinerary_revision,
+    currentTrip?.latest_itinerary,
+  ]);
+
+  const plannedAttractions = useMemo<HotelMapAttraction[]>(() => {
+    if (
+      !currentTrip?.latest_itinerary ||
+      !attractionCatalog ||
+      attractionCatalog.data_source === "synthetic"
+    ) {
+      return [];
+    }
+    const scheduledIds = new Set(
+      currentTrip.latest_itinerary.days.flatMap((day) =>
+        day.stops.map((stop) => stop.attraction_id),
+      ),
+    );
+    return attractionCatalog.attractions
+      .filter(
+        (attraction) => scheduledIds.has(attraction.id) && attraction.data_source !== "synthetic",
+      )
+      .map((attraction) => ({
+        id: attraction.id,
+        name: attraction.name,
+        category: attraction.catalog_category ?? attraction.category,
+        latitude: attraction.latitude,
+        longitude: attraction.longitude,
+        source_url: attraction.source_url ?? null,
+        attribution: attraction.attribution ?? null,
+      }));
+  }, [currentTrip?.latest_itinerary, attractionCatalog]);
+
+  const focusHotel = (hotelId: string) => {
+    setActiveHotelId(hotelId);
+    requestAnimationFrame(() => {
+      hotelCardRefs.get(hotelId)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  };
 
   return (
     <div className="space-y-5">
@@ -277,10 +339,19 @@ function Hotels() {
                 description="No OSM lodging records have been imported for this destination. GoWander will not fill the list with demonstration properties."
               />
               <aside className="surface-static overflow-hidden">
-                <div className="h-64">
-                  <IndiaMap showRoutes className="rounded-none" />
+                <div className="p-3 sm:p-4">
+                  <p className="mb-3 text-sm font-medium">
+                    {data.trip.destination} · planned visits
+                  </p>
+                  <HotelLocationMap
+                    hotels={[]}
+                    attractions={plannedAttractions}
+                    selectedHotelId={null}
+                    activeHotelId={null}
+                    mapKey={String(selectedTripId)}
+                    onSelectHotel={focusHotel}
+                  />
                 </div>
-                <p className="p-4 text-sm font-medium">{data.trip.destination} overview</p>
               </aside>
             </div>
           ) : null}
@@ -295,30 +366,42 @@ function Hotels() {
           ) : null}
 
           {!loading && !error && data && results.length > 0 ? (
-            <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
+            <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(380px,500px)]">
               <div className="grid content-start gap-4 sm:grid-cols-2">
                 {results.map((hotel) => (
-                  <HotelCard
+                  <div
                     key={hotel.id}
-                    hotel={hotel}
-                    adding={savingHotelId === hotel.id}
-                    onView={setDetail}
-                    onAdd={(item) => void addHotel(item)}
-                  />
+                    ref={(element) => {
+                      if (element) hotelCardRefs.set(hotel.id, element);
+                      else hotelCardRefs.delete(hotel.id);
+                    }}
+                    onMouseEnter={() => setActiveHotelId(hotel.id)}
+                  >
+                    <HotelCard
+                      hotel={hotel}
+                      adding={savingHotelId === hotel.id}
+                      onView={setDetail}
+                      onAdd={(item) => void addHotel(item)}
+                    />
+                  </div>
                 ))}
               </div>
               <aside className="surface-static overflow-hidden xl:sticky xl:top-24 xl:self-start">
-                <div className="h-64">
-                  <IndiaMap showRoutes className="rounded-none" />
-                </div>
-                <div className="space-y-1 p-4">
-                  <p className="text-sm font-medium">{data.trip.destination} overview</p>
-                  <p className="text-xs text-muted-foreground">
-                    {results.length} sourced stay(s) · {data.planned_attraction_count} planned
-                    attraction visits
+                <div className="p-3 sm:p-4">
+                  <p className="mb-3 text-sm font-medium">
+                    {data.trip.destination} · stays and planned visits
                   </p>
-                  <p className="text-xs text-muted-foreground">
-                    Hotel coordinates open on the source map in each detail view.
+                  <HotelLocationMap
+                    hotels={results}
+                    attractions={plannedAttractions}
+                    selectedHotelId={data.selected_accommodation?.hotel_id ?? null}
+                    activeHotelId={activeHotelId}
+                    mapKey={String(selectedTripId)}
+                    onSelectHotel={focusHotel}
+                  />
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    {results.length} sourced stay(s) · {plannedAttractions.length} mapped planned
+                    attraction(s)
                   </p>
                 </div>
               </aside>
