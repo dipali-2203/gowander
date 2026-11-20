@@ -39,15 +39,7 @@ const trip = (
 });
 
 test("legacy destination totals stay separate from complete-trip totals", () => {
-  const result = buildBudgetDashboard(
-    [trip(1)],
-    [
-      detail(1, [
-        { id: "a-1", cost: 750, cost_known: true },
-        { id: "a-2", cost: 750, cost_known: true },
-      ]),
-    ],
-  );
+  const result = buildBudgetDashboard([trip(1)]);
   assert.equal(result.tripCount, 1);
   assert.equal(result.allocatedBudget, 10_000);
   assert.equal(result.estimatedCost, 0);
@@ -56,7 +48,7 @@ test("legacy destination totals stay separate from complete-trip totals", () => 
   assert.equal(result.dailyAverage, null);
   assert.deepEqual(
     result.dailyTrips[0]?.days.map((day) => day.cost),
-    [750, 750],
+    [null, null],
   );
 });
 
@@ -109,78 +101,220 @@ test("ticket category is marked partial when unknown attraction fees were exclud
   assert.equal(tickets?.partial, true);
 });
 
-const detail = (id, attractions) => ({ id, planning_inputs: { attractions } });
-
-test("all known attraction fees produce a daily total for every itinerary day", () => {
-  const savedTrip = trip(1);
-  savedTrip.latest_itinerary.days[0].stops = [
-    { attraction_id: "a-1", cost: 500 },
-    { attraction_id: "a-extra", cost: 200 },
-  ];
-  savedTrip.latest_itinerary.days[1].stops = [{ attraction_id: "a-2", cost: 250 }];
-  const result = buildBudgetDashboard(
-    [savedTrip],
-    [
-      detail(1, [
-        { id: "a-1", cost: 500, cost_known: true },
-        { id: "a-extra", cost: 200, cost_known: true },
-        { id: "a-2", cost: 250, cost_known: true },
+test("successfully estimated original unknown fees are not counted as unresolved", () => {
+  const result = buildBudgetDashboard([
+    {
+      ...completeTrip(1, 5000, [
+        {
+          key: "attraction_fees",
+          amount: 600,
+          status: "estimated",
+          estimated_count: 2,
+          unresolved_count: 0,
+        },
       ]),
-    ],
-  );
-  assert.deepEqual(
-    result.dailyTrips[0]?.days.map(({ cost, status }) => [cost, status]),
-    [
-      [700, "available"],
-      [250, "available"],
-    ],
-  );
-});
-
-test("mixed known and unknown fees keep known totals and clearly mark partial or unavailable days", () => {
-  const savedTrip = trip(1);
-  savedTrip.latest_itinerary.days[0].stops[0].cost = 500;
-  savedTrip.latest_itinerary.days[1].stops[0].cost = 250;
-  savedTrip.latest_itinerary.days[0].stops.push({ attraction_id: "unknown-day-one", cost: 0 });
-  savedTrip.latest_itinerary.days[1].stops = [{ attraction_id: "unknown-day-two", cost: 0 }];
-  const result = buildBudgetDashboard(
-    [savedTrip],
-    [
-      detail(1, [
-        { id: "a-1", cost: 500, cost_known: true },
-        { id: "a-2", cost: 250, cost_known: true },
-        { id: "unknown-day-one", cost: 0, cost_known: false },
-        { id: "unknown-day-two", cost: 0, cost_known: false },
-      ]),
-    ],
-  );
-  assert.deepEqual(
-    result.dailyTrips[0]?.days.map(({ cost, status }) => [cost, status]),
-    [
-      [500, "partial"],
-      [null, "unavailable"],
-    ],
-  );
-});
-
-test("multiple trips retain separate day groups with different itinerary lengths", () => {
-  const first = trip(1, { days: 1 });
-  const second = trip(2, { days: 3 });
-  first.latest_itinerary.days[0].stops[0].cost = 500;
-  second.latest_itinerary.days.forEach((day, index) => {
-    day.stops[0].cost = [200, 300, 400][index];
+      latest_itinerary: {
+        ...completeTrip(1, 5000, []).latest_itinerary,
+        budget_estimate: {
+          unknown_attraction_fee_count: 2,
+          unresolved_attraction_fee_count: 0,
+          complete_budget: {
+            total_estimate: 5000,
+            categories: [
+              {
+                key: "attraction_fees",
+                amount: 600,
+                status: "estimated",
+                estimated_count: 2,
+                unresolved_count: 0,
+              },
+            ],
+          },
+        },
+      },
+    },
+  ]);
+  const tickets = result.categories.find((category) => category.key === "attraction_fees");
+  assert.equal(tickets?.partial, false);
+  assert.deepEqual(result.attractionFeeStats, {
+    originalUnknownCount: 2,
+    estimatedCount: 2,
+    unresolvedCount: 0,
   });
-  const result = buildBudgetDashboard(
-    [first, second],
+});
+
+test("partly unresolved fees keep estimate and unresolved counts separate", () => {
+  const result = buildBudgetDashboard([
+    {
+      ...completeTrip(1, null, []),
+      latest_itinerary: {
+        ...completeTrip(1, null, []).latest_itinerary,
+        budget_estimate: {
+          unknown_attraction_fee_count: 3,
+          unresolved_attraction_fee_count: 1,
+          complete_budget: {
+            total_estimate: null,
+            categories: [
+              {
+                key: "attraction_fees",
+                amount: 400,
+                status: "partial",
+                estimated_count: 2,
+                unresolved_count: 1,
+              },
+            ],
+          },
+        },
+      },
+    },
+  ]);
+  const tickets = result.categories.find((category) => category.key === "attraction_fees");
+  assert.equal(tickets?.partial, true);
+  assert.deepEqual(result.attractionFeeStats, {
+    originalUnknownCount: 3,
+    estimatedCount: 2,
+    unresolvedCount: 1,
+  });
+});
+
+test("dashboard derives unresolved fees after subtracting successful estimates when needed", () => {
+  const saved = trip(1, { unknownFees: 5 });
+  saved.latest_itinerary.budget_estimate.categories = [
+    { key: "attractions", amount: 300, estimated_count: 3 },
+  ];
+  const result = buildBudgetDashboard([saved]);
+  assert.deepEqual(result.attractionFeeStats, {
+    originalUnknownCount: 5,
+    estimatedCount: 3,
+    unresolvedCount: 2,
+  });
+});
+
+const feeDay = (day_number, values = {}) => ({
+  day_number,
+  date: `2026-12-0${day_number}`,
+  scheduled_unique_attraction_count: 1,
+  fee_counted_attraction_count: 1,
+  verified_fee_total: 0,
+  estimated_fee_lower_total: 0,
+  estimated_fee_representative_total: 0,
+  estimated_fee_upper_total: 0,
+  representative_total: 0,
+  lower_total: 0,
+  upper_total: 0,
+  unresolved_attraction_count: 0,
+  status: "no_attractions",
+  attractions: [],
+  ...values,
+});
+
+const withDailyFees = (savedTrip, dailyFees) => {
+  savedTrip.latest_itinerary.budget_estimate.daily_attraction_fees = dailyFees;
+  return savedTrip;
+};
+
+test("daily chart uses backend estimates even when optimizer stop costs are zero", () => {
+  const savedTrip = trip(1);
+  savedTrip.latest_itinerary.days[0].stops[0].cost = 0;
+  const result = buildBudgetDashboard([
+    withDailyFees(savedTrip, [
+      feeDay(1, {
+        status: "estimated",
+        scheduled_unique_attraction_count: 2,
+        estimated_fee_lower_total: 100,
+        estimated_fee_representative_total: 300,
+        estimated_fee_upper_total: 1000,
+        representative_total: 300,
+        lower_total: 100,
+        upper_total: 1000,
+        attractions: [{ status: "estimated" }, { status: "estimated" }],
+      }),
+      feeDay(2, {
+        status: "partial",
+        verified_fee_total: 50,
+        estimated_fee_lower_total: 0,
+        estimated_fee_representative_total: 100,
+        estimated_fee_upper_total: 400,
+        representative_total: 150,
+        lower_total: 50,
+        upper_total: 450,
+        unresolved_attraction_count: 1,
+        attractions: [{ status: "verified" }, { status: "estimated" }],
+      }),
+    ]),
+  ]);
+  const daily = result.dailyTrips[0];
+  assert.equal(daily.hasFeeData, true);
+  assert.deepEqual(
+    daily.days.map(({ cost, status, verifiedAmount, estimatedAmount }) => [
+      cost,
+      status,
+      verifiedAmount,
+      estimatedAmount,
+    ]),
     [
-      detail(1, [{ id: "a-1", cost: 500, cost_known: true }]),
-      detail(2, [
-        { id: "a-1", cost: 200, cost_known: true },
-        { id: "a-2", cost: 300, cost_known: true },
-        { id: "a-3", cost: 400, cost_known: true },
-      ]),
+      [300, "estimated", 0, 300],
+      [150, "partial", 50, 100],
     ],
   );
+});
+
+test("unknown daily fees remain unavailable instead of becoming zero", () => {
+  const result = buildBudgetDashboard([
+    withDailyFees(trip(1), [
+      feeDay(1, {
+        status: "unavailable",
+        fee_counted_attraction_count: 1,
+        unresolved_attraction_count: 1,
+        attractions: [{ status: "unavailable" }],
+      }),
+      feeDay(2, {
+        status: "no_attractions",
+        scheduled_unique_attraction_count: 0,
+        fee_counted_attraction_count: 0,
+      }),
+    ]),
+  ]);
+  assert.equal(result.dailyTrips[0]?.hasFeeData, false);
+  assert.equal(result.dailyTrips[0]?.days[0]?.cost, null);
+  assert.equal(result.dailyTrips[0]?.days[0]?.status, "unavailable");
+  assert.equal(result.dailyTrips[0]?.days[0]?.unknownCount, 1);
+  assert.equal(result.dailyTrips[0]?.days[1]?.cost, 0);
+  assert.equal(result.dailyTrips[0]?.days[1]?.status, "no_attractions");
+});
+
+test("multiple trips retain separate daily estimate groups and itinerary lengths", () => {
+  const first = withDailyFees(trip(1, { days: 1 }), [
+    feeDay(1, {
+      status: "verified",
+      verified_fee_total: 500,
+      representative_total: 500,
+      lower_total: 500,
+      upper_total: 500,
+      attractions: [{ status: "verified" }],
+    }),
+  ]);
+  const second = withDailyFees(trip(2, { days: 3 }), [
+    feeDay(1, {
+      status: "estimated",
+      estimated_fee_representative_total: 200,
+      representative_total: 200,
+      attractions: [{ status: "estimated" }],
+    }),
+    feeDay(2, {
+      status: "estimated",
+      estimated_fee_representative_total: 300,
+      representative_total: 300,
+      attractions: [{ status: "estimated" }],
+    }),
+    feeDay(3, {
+      status: "estimated",
+      estimated_fee_representative_total: 400,
+      representative_total: 400,
+      attractions: [{ status: "estimated" }],
+    }),
+  ]);
+  const result = buildBudgetDashboard([first, second]);
   assert.deepEqual(
     result.dailyTrips.map((group) => group.days.length),
     [1, 3],
@@ -189,40 +323,48 @@ test("multiple trips retain separate day groups with different itinerary lengths
     result.dailyTrips.map((group) => group.days[0]?.cost),
     [500, 200],
   );
+  assert.equal(result.dailyTrips[0].days[0].knownCount, 1);
+  assert.equal(result.dailyTrips[1].days[0].estimatedCount, 1);
 });
 
-test("unknown fees never become a zero-cost display value", () => {
-  const result = buildBudgetDashboard(
-    [trip(1)],
-    [
-      detail(1, [
-        { id: "a-1", cost: 0, cost_known: false },
-        { id: "a-2", cost: 0, cost_known: false },
-      ]),
-    ],
-  );
+test("repeated attractions already charged on an earlier day are not counted again", () => {
+  const result = buildBudgetDashboard([
+    withDailyFees(trip(1), [
+      feeDay(1, {
+        status: "estimated",
+        estimated_fee_representative_total: 300,
+        representative_total: 300,
+        attractions: [{ status: "estimated" }],
+      }),
+      feeDay(2, {
+        status: "already_counted",
+        fee_counted_attraction_count: 0,
+        representative_total: 0,
+        attractions: [],
+      }),
+    ]),
+  ]);
+  assert.equal(result.dailyTrips[0].days[0].cost, 300);
+  assert.equal(result.dailyTrips[0].days[1].cost, null);
+  assert.equal(result.dailyTrips[0].days[1].status, "already_counted");
+});
+
+test("old snapshots without backend daily fee data never fall back to optimizer costs", () => {
+  const result = buildBudgetDashboard([trip(1)]);
+  assert.equal(result.dailyTrips[0]?.breakdownAvailable, false);
+  assert.equal(result.dailyTrips[0]?.hasFeeData, false);
   assert.equal(result.dailyTrips[0]?.days[0]?.cost, null);
   assert.equal(result.dailyTrips[0]?.days[0]?.status, "unavailable");
 });
 
-test("missing attraction availability metadata stays unavailable instead of trusting placeholder stop cost", () => {
-  const result = buildBudgetDashboard([trip(1)]);
-  assert.equal(result.dailyTrips[0]?.days[0]?.cost, null);
-  assert.equal(result.dailyTrips[0]?.days[0]?.status, "unavailable");
-});
-
-test("actual expense data is not synthesized", () => {
-  const result = buildBudgetDashboard([trip(1)]);
-  assert.equal("actualCosts" in result, false);
-  assert.equal("actual" in (result.dailyTrips[0]?.days[0] ?? {}), false);
-});
-
-test("daily budget UI labels partial and unavailable days and lets travelers choose a trip", () => {
+test("daily budget UI identifies backend fee estimates and unavailable days", () => {
   assert.match(budgetPage, /Choose trip for daily budget overview/);
   assert.match(budgetPage, /dayLabel: `Day \$\{day\.dayNumber\}`/);
-  assert.match(budgetPage, /Cost unavailable/);
-  assert.match(budgetPage, /Partial/);
-  assert.match(budgetPage, /Unknown fees\s+are excluded/);
+  assert.match(budgetPage, /Fee estimate unavailable/);
+  assert.match(budgetPage, /Verified fee/);
+  assert.match(budgetPage, /Estimated fee/);
+  assert.match(budgetPage, /same verified and versioned estimates/);
+  assert.doesNotMatch(budgetPage, /optimizer itinerary costs and exclude unknown fees/);
 });
 
 const completeTrip = (id, total, categories, options = {}) => ({

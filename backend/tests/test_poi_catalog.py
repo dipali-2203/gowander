@@ -35,6 +35,8 @@ def element(osm_id, *, osm_type="node", name="Amber Fort", lat=26.9855, lon=75.8
 
 def test_normalizes_osm_categories_and_keeps_unknown_planning_values_unknown():
     assert normalize_category({"historic": "castle"}) == "historical"
+    assert normalize_category({"tourism": "attraction", "historic": "yes"}) == "historical"
+    assert normalize_category({"tourism": "attraction", "heritage": "2"}) == "historical"
     assert normalize_category({"amenity": "museum"}) == "museum"
     assert normalize_category({"amenity": "place_of_worship"}) == "religious"
     assert normalize_category({"leisure": "garden"}) == "park"

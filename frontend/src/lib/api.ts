@@ -102,6 +102,9 @@ export type TripBudgetEstimate = {
   within_budget: boolean;
   is_complete: boolean;
   unknown_attraction_fee_count: number;
+  unresolved_attraction_fee_count?: number;
+  attraction_fee_details?: AttractionFeeDetail[];
+  daily_attraction_fees?: DailyAttractionFees[];
   categories: Array<{
     key: string;
     label: string;
@@ -111,9 +114,52 @@ export type TripBudgetEstimate = {
     range_min: number;
     range_max: number;
     assumptions: string[];
+    estimated_count?: number;
+    unresolved_count?: number;
   }>;
   exclusions: string[];
   last_updated: string | null;
+};
+
+export type AttractionFeeDetail = {
+  attraction_id: string;
+  name: string | null;
+  category: string | null;
+  original_fee_available: boolean;
+  original_fee_amount?: number | null;
+  original_fee_currency?: string | null;
+  original_fee_pricing_basis?: "per_person" | "group" | null;
+  original_fee_status: string | null;
+  status: "verified" | "estimated" | "unavailable";
+  estimate_type: "verified" | "source_tag" | "attraction_specific" | "category" | "unresolved";
+  estimate_category?: string | null;
+  estimate_version?: string | null;
+  lower: number | null;
+  representative: number | null;
+  upper: number | null;
+  currency: string;
+  source: string | null;
+  assumptions: string[];
+};
+
+export type DailyAttractionFees = {
+  day_number: number | null;
+  date: string;
+  scheduled_unique_attraction_count: number;
+  fee_counted_attraction_count: number;
+  verified_fee_total: number;
+  estimated_fee_lower_total: number;
+  estimated_fee_representative_total: number;
+  estimated_fee_upper_total: number;
+  representative_total: number;
+  lower_total: number;
+  upper_total: number;
+  unresolved_attraction_count: number;
+  currency: string;
+  status:
+    "verified" | "estimated" | "partial" | "unavailable" | "no_attractions" | "already_counted";
+  assumptions: string[];
+  attractions: AttractionFeeDetail[];
 };
 
 export type BudgetCostStatus =
@@ -128,6 +174,13 @@ export type CompleteBudgetCategory = {
   source: string | null;
   assumptions: string[];
   confidence?: string;
+  verified_amount?: number | null;
+  estimated_amount?: number | null;
+  verified_count?: number;
+  estimated_count?: number;
+  unresolved_count?: number;
+  sources?: string[];
+  estimate_config_version?: string | null;
   range_min?: number | null;
   range_max?: number | null;
   mode?: string | null;
@@ -511,10 +564,13 @@ export type TripPlanningOptions = {
   luxury_level?: number;
   meal_preferences: string[];
   miscellaneous_budget: number;
+  miscellaneous_budget_mode?: MiscellaneousBudgetMode | null;
   intercity_transportation_mode?: string | null;
   intercity_outbound_cost?: IntercityCostInput | null;
   intercity_return_cost?: IntercityCostInput | null;
 };
+
+export type MiscellaneousBudgetMode = "automatic" | "manual" | "disabled";
 
 export type IntercityCostInput = {
   amount: number | null;
@@ -618,6 +674,9 @@ export type SharedItinerary = {
     within_budget: boolean;
     is_complete: boolean;
     unknown_attraction_fee_count: number;
+    unresolved_attraction_fee_count?: number;
+    attraction_fee_details?: AttractionFeeDetail[];
+    daily_attraction_fees?: DailyAttractionFees[];
     categories: TripBudgetEstimate["categories"];
     exclusions: string[];
     last_updated: string | null;
@@ -1003,6 +1062,7 @@ export async function createAndOptimizeTrip(input: {
   accommodationCategory: TripPlanningOptions["accommodation_category"];
   luxuryLevel: number;
   miscellaneousBudget: number;
+  miscellaneousBudgetMode: MiscellaneousBudgetMode;
   intercityTransportationMode: string | null;
   intercityOutboundCost: number | null;
   intercityReturnCost: number | null;
@@ -1173,6 +1233,7 @@ export async function createAndOptimizeTrip(input: {
         luxury_level: input.luxuryLevel,
         meal_preferences: input.mealPreferences,
         miscellaneous_budget: input.miscellaneousBudget,
+        miscellaneous_budget_mode: input.miscellaneousBudgetMode,
         intercity_transportation_mode: input.intercityTransportationMode,
         intercity_outbound_cost: intercityRecord(
           input.intercityOutboundCost,

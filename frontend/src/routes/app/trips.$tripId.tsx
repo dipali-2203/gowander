@@ -12,6 +12,7 @@ import {
   getTrip,
   regenerateTrip,
   updateTrip,
+  type MiscellaneousBudgetMode,
   type TripDetails,
   type TripPlanningOptions,
 } from "@/lib/api";
@@ -68,6 +69,7 @@ function TripDetailsPage() {
     accommodation: "standard" as TripPlanningOptions["accommodation_category"],
     mealPreferences: "",
     miscellaneous: "0",
+    miscellaneousMode: "automatic" as MiscellaneousBudgetMode,
     dailyCutoff: "20:00",
     interests: "",
   });
@@ -92,6 +94,9 @@ function TripDetailsPage() {
         accommodation: saved.planning_options.accommodation_category,
         mealPreferences: saved.planning_options.meal_preferences.join(", "),
         miscellaneous: String(saved.planning_options.miscellaneous_budget),
+        miscellaneousMode:
+          saved.planning_options.miscellaneous_budget_mode ??
+          (saved.planning_options.miscellaneous_budget > 0 ? "manual" : "automatic"),
         dailyCutoff: clock(saved.available_minutes_per_day),
         interests: Object.keys(
           (saved.preferences["interests"] ?? {}) as Record<string, unknown>,
@@ -114,6 +119,15 @@ function TripDetailsPage() {
     if (!trip) return;
     setBusy(true);
     try {
+      const miscellaneousAmount = Number(form.miscellaneous);
+      if (
+        form.miscellaneousMode === "manual" &&
+        (!Number.isFinite(miscellaneousAmount) ||
+          miscellaneousAmount < 0 ||
+          miscellaneousAmount > 5_000_000)
+      ) {
+        throw new Error("Enter a manual miscellaneous amount from ₹0 to ₹5,000,000.");
+      }
       const interests = Object.fromEntries(
         form.interests
           .split(",")
@@ -139,7 +153,8 @@ function TripDetailsPage() {
             .split(",")
             .map((value) => value.trim())
             .filter(Boolean),
-          miscellaneous_budget: Number(form.miscellaneous),
+          miscellaneous_budget: form.miscellaneousMode === "manual" ? miscellaneousAmount : 0,
+          miscellaneous_budget_mode: form.miscellaneousMode,
         },
       });
       const updated = await getTrip(trip.id);
@@ -419,12 +434,45 @@ function TripDetailsPage() {
               value={form.mealPreferences}
               onChange={(value) => setForm({ ...form, mealPreferences: value })}
             />
-            <Field
-              label="Miscellaneous estimate (INR)"
-              type="number"
-              value={form.miscellaneous}
-              onChange={(value) => setForm({ ...form, miscellaneous: value })}
-            />
+            <label className="space-y-1 text-sm">
+              Miscellaneous allowance
+              <select
+                className="w-full rounded-md border border-input bg-background px-3 py-2"
+                value={form.miscellaneousMode}
+                onChange={(event) =>
+                  setForm({
+                    ...form,
+                    miscellaneousMode: event.target.value as MiscellaneousBudgetMode,
+                  })
+                }
+              >
+                <option value="automatic">Automatic estimate</option>
+                <option value="manual">Manual amount</option>
+                <option value="disabled">No allowance</option>
+              </select>
+              {form.miscellaneousMode === "automatic" ? (
+                <span className="block text-xs text-muted-foreground">
+                  10% representative estimate with a 5–15% range, calculated from the other six
+                  budget categories. It may be provisional when those costs are incomplete.
+                </span>
+              ) : form.miscellaneousMode === "manual" ? (
+                <span className="block text-xs text-muted-foreground">
+                  Manual whole-trip INR amount; it overrides automatic estimation. ₹0 is allowed.
+                </span>
+              ) : (
+                <span className="block text-xs text-muted-foreground">
+                  Miscellaneous expenses are excluded from the estimate.
+                </span>
+              )}
+            </label>
+            {form.miscellaneousMode === "manual" && (
+              <Field
+                label="Manual miscellaneous amount (INR)"
+                type="number"
+                value={form.miscellaneous}
+                onChange={(value) => setForm({ ...form, miscellaneous: value })}
+              />
+            )}
             <Field
               label="Travel interests (comma-separated)"
               value={form.interests}

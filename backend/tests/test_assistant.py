@@ -262,12 +262,17 @@ def _fake_sdk(monkeypatch, response_text="Mock Gemini reply", error=None):
             self.calls += 1
             captured["request_calls"] = self.calls
             captured.update(kwargs)
-            if error == "timeout":
+            current_error = (
+                error[min(self.calls - 1, len(error) - 1)]
+                if isinstance(error, (list, tuple)) and error
+                else error
+            )
+            if current_error == "timeout":
                 raise asyncio.TimeoutError
-            if isinstance(error, Exception):
-                raise error
-            if error is not None:
-                raise FakeAPIError(error)
+            if isinstance(current_error, Exception):
+                raise current_error
+            if current_error is not None:
+                raise FakeAPIError(current_error)
             return SimpleNamespace(text=response_text)
 
     class FakeAsyncClient:
@@ -393,19 +398,68 @@ def test_gemini_provider_sends_session_history_without_provider_persistence(monk
 
 def test_gemini_provider_handles_rate_limit_and_provider_failure(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    _fake_sdk(monkeypatch, error=429)
+    rate_limited = _fake_sdk(monkeypatch, error=429)
     with pytest.raises(AssistantRateLimited):
         asyncio.run(generate_gemini_reply(system_instruction="", history=[], message="Hi"))
+    assert rate_limited["request_calls"] == 2
     captured = _fake_sdk(monkeypatch, error=503)
     with pytest.raises(AssistantUnavailable):
         asyncio.run(generate_gemini_reply(system_instruction="", history=[], message="Hi"))
+    assert captured["request_calls"] == 2
+    timed_out = _fake_sdk(monkeypatch, error=504)
+    with pytest.raises(AssistantTimedOut):
+        asyncio.run(generate_gemini_reply(system_instruction="", history=[], message="Hi"))
+    assert timed_out["request_calls"] == 2
+    timed_out = _fake_sdk(monkeypatch, error="timeout")
+    with pytest.raises(AssistantTimedOut):
+        asyncio.run(generate_gemini_reply(system_instruction="", history=[], message="Hi"))
+    assert timed_out["request_calls"] == 2
+
+
+@pytest.mark.parametrize("status_code", [429, 500, 502, 503, 504])
+def test_gemini_provider_retries_transient_status_once_then_succeeds(monkeypatch, status_code):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(gemini_provider, "RETRY_BACKOFF_SECONDS", 0)
+    captured = _fake_sdk(monkeypatch, error=[status_code, None], response_text="Recovered")
+
+    result = asyncio.run(generate_gemini_reply(system_instruction="", history=[], message="Hi"))
+
+    assert result == "Recovered"
+    assert captured["request_calls"] == 2
+
+
+@pytest.mark.parametrize("status_code", [429, 500, 502, 503, 504])
+def test_gemini_provider_stops_after_one_retry_on_transient_exhaustion(monkeypatch, status_code):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(gemini_provider, "RETRY_BACKOFF_SECONDS", 0)
+    captured = _fake_sdk(monkeypatch, error=status_code)
+    expected_error = (
+        AssistantRateLimited if status_code == 429
+        else AssistantTimedOut if status_code == 504
+        else AssistantUnavailable
+    )
+
+    with pytest.raises(expected_error):
+        asyncio.run(generate_gemini_reply(system_instruction="", history=[], message="Hi"))
+
+    assert captured["request_calls"] == 2
+
+
+def test_gemini_provider_does_not_retry_invalid_api_key(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    captured = _fake_sdk(monkeypatch, error=401)
+    with pytest.raises(AssistantNotConfigured):
+        asyncio.run(generate_gemini_reply(system_instruction="", history=[], message="Hi"))
     assert captured["request_calls"] == 1
-    _fake_sdk(monkeypatch, error=504)
-    with pytest.raises(AssistantTimedOut):
-        asyncio.run(generate_gemini_reply(system_instruction="", history=[], message="Hi"))
-    _fake_sdk(monkeypatch, error="timeout")
-    with pytest.raises(AssistantTimedOut):
-        asyncio.run(generate_gemini_reply(system_instruction="", history=[], message="Hi"))
+
+
+def test_gemini_provider_honors_bounded_retry_after(monkeypatch):
+    error = SimpleNamespace(response=SimpleNamespace(headers={"Retry-After": "4"}))
+    assert gemini_provider._retry_after_seconds(error) == 4
+    assert gemini_provider._retry_delay(error, 0) == 4
+    assert gemini_provider._retry_delay(
+        SimpleNamespace(response=SimpleNamespace(headers={"Retry-After": "999"})), 0
+    ) is None
 
 
 def test_gemini_provider_retries_transient_failure_once(monkeypatch):

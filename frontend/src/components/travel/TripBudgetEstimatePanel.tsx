@@ -1,4 +1,4 @@
-import type { CompleteTripBudget, TripBudgetEstimate } from "@/lib/api";
+import type { CompleteBudgetCategory, CompleteTripBudget, TripBudgetEstimate } from "@/lib/api";
 
 const formatInr = (amount: number) =>
   `₹${amount.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
@@ -14,6 +14,32 @@ const statusLabel: Record<string, string> = {
 function subtotalLabel(value: number | null | undefined, emptyLabel: string) {
   if (typeof value !== "number" || !Number.isFinite(value)) return "Unavailable";
   return value === 0 ? emptyLabel : formatInr(value);
+}
+
+function categoryAmountLabel(category: CompleteBudgetCategory) {
+  if (category.status === "unavailable" || typeof category.amount !== "number")
+    return "Unavailable";
+  if (category.status === "partial")
+    return (category.estimated_count ?? 0) > 0
+      ? `${formatInr(category.amount)} available estimate · partial`
+      : (category.verified_count ?? 0) > 0
+        ? `${formatInr(category.amount)} verified subtotal · partial`
+        : `${formatInr(category.amount)} available subtotal · partial`;
+  if (category.status === "estimated") return `${formatInr(category.amount)} estimated`;
+  if (category.status === "verified") return `${formatInr(category.amount)} verified`;
+  if (category.status === "user_provided") return `${formatInr(category.amount)} user provided`;
+  return formatInr(category.amount);
+}
+
+function miscellaneousMode(category: CompleteBudgetCategory) {
+  if (category.source === "versioned_contingency_assumption") return "Automatic estimate";
+  if (category.source === "User input") return "Manual amount";
+  if (
+    category.status === "unavailable" &&
+    category.assumptions.some((assumption) => /disabled/i.test(assumption))
+  )
+    return "Disabled";
+  return "Not available";
 }
 
 function CompleteBudgetDetails({ budget }: { budget: CompleteTripBudget }) {
@@ -54,6 +80,20 @@ function CompleteBudgetDetails({ budget }: { budget: CompleteTripBudget }) {
           </p>
         </div>
       </div>
+
+      {overrun !== null && typeof budgetLimit === "number" && overrun > 0 && (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm">
+          <p>Representative estimate over budget by {formatInr(overrun)}.</p>
+          {typeof budget.total_estimate_range_max === "number" &&
+            typeof budgetLimit === "number" &&
+            budget.total_estimate_range_max > budgetLimit && (
+              <p className="mt-1">
+                Upper-range estimate over budget by{" "}
+                {formatInr(budget.total_estimate_range_max - budgetLimit)}.
+              </p>
+            )}
+        </div>
+      )}
 
       {typeof budget.total_estimate_range_min === "number" &&
         typeof budget.total_estimate_range_max === "number" && (
@@ -100,19 +140,71 @@ function CompleteBudgetDetails({ budget }: { budget: CompleteTripBudget }) {
                 <span className="rounded-full bg-muted px-2 py-0.5 text-[11px]">
                   {statusLabel[category.status] ?? category.status}
                 </span>
-                <strong>
-                  {category.status === "unavailable" || typeof category.amount !== "number"
-                    ? "Unavailable"
-                    : category.status === "partial"
-                      ? category.amount > 0
-                        ? `${formatInr(category.amount)} known subtotal`
-                        : "Partial · no known amount"
-                      : formatInr(category.amount)}
-                </strong>
+                <strong>{categoryAmountLabel(category)}</strong>
               </span>
             </summary>
             <div className="mt-2 space-y-1 text-xs text-muted-foreground">
               <p>Source: {category.source ?? "Unavailable"}</p>
+              {category.key === "attraction_fees" && (
+                <>
+                  <p>
+                    Verified fees:{" "}
+                    {category.verified_count
+                      ? typeof category.verified_amount === "number"
+                        ? formatInr(category.verified_amount)
+                        : "Unavailable"
+                      : "No verified fees"}
+                  </p>
+                  <p>
+                    Estimated fees:{" "}
+                    {category.estimated_count
+                      ? typeof category.estimated_amount === "number"
+                        ? formatInr(category.estimated_amount)
+                        : "Unavailable"
+                      : "No estimated fees"}
+                    {typeof category.estimated_count === "number"
+                      ? ` · ${category.estimated_count} attraction(s) covered by estimates`
+                      : ""}
+                  </p>
+                  <p>
+                    Unresolved amount:{" "}
+                    {category.unresolved_count === 0
+                      ? "None (0 attractions)"
+                      : `Unavailable · ${category.unresolved_count ?? "unknown count"} attraction(s)`}
+                  </p>
+                  {typeof category.amount === "number" &&
+                    typeof category.range_min === "number" &&
+                    typeof category.range_max === "number" && (
+                      <p>
+                        Fee range: lower {formatInr(category.range_min)} · representative{" "}
+                        {formatInr(category.amount)} · upper {formatInr(category.range_max)}
+                      </p>
+                    )}
+                  {category.estimate_config_version && (
+                    <p>Estimate configuration: {category.estimate_config_version}</p>
+                  )}
+                  {category.sources?.map((source) => (
+                    <p key={source}>Fee provenance: {source}</p>
+                  ))}
+                </>
+              )}
+              {category.key === "miscellaneous" && (
+                <>
+                  <p>Mode: {miscellaneousMode(category)}</p>
+                  {category.source === "versioned_contingency_assumption" &&
+                  typeof category.amount === "number" &&
+                  typeof category.range_min === "number" &&
+                  typeof category.range_max === "number" ? (
+                    <p>
+                      Lower {formatInr(category.range_min)} · representative{" "}
+                      {formatInr(category.amount)} · upper {formatInr(category.range_max)}
+                    </p>
+                  ) : null}
+                  {category.estimate_config_version && (
+                    <p>Estimate configuration: {category.estimate_config_version}</p>
+                  )}
+                </>
+              )}
               {typeof category.range_min === "number" && typeof category.range_max === "number" && (
                 <p>
                   Indicative range: {formatInr(category.range_min)}–{formatInr(category.range_max)}

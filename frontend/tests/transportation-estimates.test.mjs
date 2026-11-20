@@ -4,10 +4,15 @@ import { readFileSync } from "node:fs";
 
 const planner = readFileSync(new URL("../src/routes/app/planner.tsx", import.meta.url), "utf8");
 const api = readFileSync(new URL("../src/lib/api.ts", import.meta.url), "utf8");
-const panel = readFileSync(new URL("../src/components/travel/TripBudgetEstimatePanel.tsx", import.meta.url), "utf8");
+const panel = readFileSync(
+  new URL("../src/components/travel/TripBudgetEstimatePanel.tsx", import.meta.url),
+  "utf8",
+);
 
 test("planner separates local modes from intercity fare modes", () => {
-  const intercity = planner.slice(planner.indexOf("<h3 className=\"text-sm font-semibold\">Intercity transportation</h3>"));
+  const intercity = planner.slice(
+    planner.indexOf('<h3 className="text-sm font-semibold">Intercity transportation</h3>'),
+  );
   assert.match(planner, /Local transportation/);
   assert.match(planner, /Intercity transportation/);
   assert.match(planner, /SelectItem value="walking"/);
@@ -25,6 +30,16 @@ test("planner displays ranges, whole-group wording, and unavailable estimates", 
   assert.match(planner, /whole group/);
   assert.match(planner, /Estimate unavailable/);
   assert.match(planner, /manual amount takes priority/);
+});
+
+test("undecided intercity mode displays separate provisional mode ranges without a blended amount", () => {
+  assert.match(planner, /cost\.mode_estimates/);
+  assert.match(planner, /Choose a mode to use an estimate/);
+  assert.match(planner, /straight-line proxy/);
+  assert.match(
+    planner,
+    /bus and private-car ranges use straight-line-derived road-distance proxies/,
+  );
 });
 
 test("manual estimate confirmation is required before trip creation", () => {

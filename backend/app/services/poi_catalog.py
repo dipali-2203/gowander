@@ -50,10 +50,11 @@ def normalize_category(tags: dict[str, str]) -> str | None:
         return "viewpoint"
     if amenity in {"theatre", "arts_centre", "cinema", "arts_center"} or tourism in {"artwork", "gallery"}:
         return "cultural"
+    heritage = tags.get("heritage", "").strip().lower()
+    if historic not in {"", "no", "false", "0"} or heritage not in {"", "no", "false", "0"}:
+        return "historical"
     if tourism in {"theme_park", "zoo", "aquarium", "attraction"}:
         return "entertainment" if tourism in {"theme_park", "zoo", "aquarium"} else "other"
-    if historic or tags.get("heritage"):
-        return "historical"
     if tourism:
         return "other"
     return None

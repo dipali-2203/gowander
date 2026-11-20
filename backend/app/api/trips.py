@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 import os
+from copy import copy
 from datetime import datetime, timezone
 
 from app.database import get_db
@@ -39,7 +40,11 @@ from app.services.preference_learning import apply_feedback
 from app.services.risk import calculate_attraction_risk, simulate_completion_probability
 from app.services.conditions import estimated_conditions
 from app.services.annealing import generate_annealed_itinerary
-from app.services.budget import attraction_budget_after_fixed_costs, estimate_trip_budget
+from app.services.budget import (
+    attraction_budget_after_fixed_costs,
+    estimate_saved_itinerary_budget,
+    estimate_trip_budget,
+)
 from app.services.transportation_estimator import (
     estimate_intercity_transport,
     intercity_cost_record,
@@ -85,8 +90,8 @@ def _save_itinerary_revision(trip: Trip, itinerary: dict) -> None:
     trip.pending_itinerary_revision = None
 
 
-def _has_current_complete_budget(trip: Trip) -> bool:
-    itinerary = trip.latest_itinerary if isinstance(trip.latest_itinerary, dict) else {}
+def _has_current_complete_budget(trip: Trip, itinerary: dict | None = None) -> bool:
+    itinerary = itinerary if isinstance(itinerary, dict) else {}
     estimate = itinerary.get("budget_estimate") if isinstance(itinerary, dict) else None
     return bool(
         not trip.itinerary_stale
@@ -108,8 +113,11 @@ def _budget_allocation_warnings(trip: Trip, allocation: float | None = None) -> 
             warnings.append(
                 f"Intercity {direction} cost is not in INR and cannot be reserved without currency conversion."
             )
-    if float(options.get("miscellaneous_budget") or 0) <= 0:
-        warnings.append("No miscellaneous allowance was provided; no amount is reserved for those expenses.")
+    misc_mode = options.get("miscellaneous_budget_mode")
+    if misc_mode == "disabled":
+        warnings.append("Automatic miscellaneous contingency is disabled; those expenses are excluded from the estimate.")
+    elif misc_mode == "automatic" or (misc_mode is None and float(options.get("miscellaneous_budget") or 0) <= 0):
+        warnings.append("The automatic miscellaneous contingency is included in the complete budget estimate after itinerary generation; it is not reserved during attraction selection.")
     if allocation is not None and allocation <= 0:
         warnings.append("Known reserved costs consume or exceed the full trip budget, leaving no attraction budget.")
     return warnings
@@ -295,8 +303,10 @@ def list_trips(db: Session = Depends(get_db), user: User = Depends(get_current_u
         .order_by(Trip.updated_at.desc(), Trip.created_at.desc(), Trip.id.desc())
         .all()
     )
-    return [
-        {
+    result = []
+    for trip in trips:
+        display_itinerary = estimate_saved_itinerary_budget(trip)
+        result.append({
             "id": trip.id,
             "name": trip.name or trip.destination,
             "origin": trip.origin,
@@ -310,18 +320,17 @@ def list_trips(db: Session = Depends(get_db), user: User = Depends(get_current_u
             "preferences": trip.preferences,
             "planning_options": trip.planning_options,
             "optimization_results": _serialize_legacy_risk(trip.optimization_results),
-            "latest_itinerary": _serialize_legacy_risk(trip.latest_itinerary),
+            "latest_itinerary": _serialize_legacy_risk(display_itinerary),
             "created_at": trip.created_at.isoformat() if trip.created_at else None,
             "updated_at": trip.updated_at.isoformat() if trip.updated_at else None,
             "itinerary_stale": trip.itinerary_stale,
-            "complete_budget_current": _has_current_complete_budget(trip),
+            "complete_budget_current": _has_current_complete_budget(trip, display_itinerary),
             "itinerary_revision": trip.itinerary_revision,
             "completed_attraction_ids": trip.completed_attraction_ids or [],
             "pending_itinerary_revision": trip.pending_itinerary_revision,
             "selected_accommodation": selected_accommodation_payload(trip),
-        }
-        for trip in trips
-    ]
+        })
+    return result
 
 
 @router.post("", status_code=201)
@@ -390,6 +399,7 @@ def get_trip(
             detail="Trip not found",
         )
 
+    display_itinerary = estimate_saved_itinerary_budget(trip)
     return {
         "id": trip.id,
         "name": trip.name or trip.destination,
@@ -405,11 +415,11 @@ def get_trip(
         "planning_options": trip.planning_options,
         "planning_inputs": trip.planning_inputs,
         "optimization_results": _serialize_legacy_risk(trip.optimization_results),
-        "latest_itinerary": _serialize_legacy_risk(trip.latest_itinerary),
+        "latest_itinerary": _serialize_legacy_risk(display_itinerary),
         "created_at": trip.created_at.isoformat() if trip.created_at else None,
         "updated_at": trip.updated_at.isoformat() if trip.updated_at else None,
         "itinerary_stale": trip.itinerary_stale,
-        "complete_budget_current": _has_current_complete_budget(trip),
+        "complete_budget_current": _has_current_complete_budget(trip, display_itinerary),
         "itinerary_revision": trip.itinerary_revision,
         "completed_attraction_ids": trip.completed_attraction_ids or [],
         "pending_itinerary_revision": trip.pending_itinerary_revision,
@@ -456,8 +466,10 @@ def export_trip_pdf(trip_id: int, db: Session = Depends(get_db)):
     if not trip.latest_itinerary:
         raise HTTPException(status_code=409, detail="Save an itinerary before downloading a PDF.")
     filename = itinerary_pdf_filename(trip)
+    display_trip = copy(trip)
+    display_trip.latest_itinerary = estimate_saved_itinerary_budget(trip)
     return Response(
-        content=render_itinerary_pdf(trip),
+        content=render_itinerary_pdf(display_trip),
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

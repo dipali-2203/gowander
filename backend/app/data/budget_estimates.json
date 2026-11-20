@@ -1,0 +1,15 @@
+{
+  "version": "1.2.0",
+  "currency": "INR",
+  "attraction_fee_pricing_basis": "per_person",
+  "category_estimates_require_fee_yes": true,
+  "paid_admission_categories": ["historical", "history", "museum", "entertainment"],
+  "attraction_fee_category_estimates": {
+    "historical": {"lower": 50, "representative": 150, "upper": 500},
+    "history": {"lower": 50, "representative": 150, "upper": 500},
+    "museum": {"lower": 50, "representative": 150, "upper": 500},
+    "entertainment": {"lower": 100, "representative": 300, "upper": 800}
+  },
+  "attraction_specific_estimates": {},
+  "miscellaneous_contingency_percentages": {"lower": 5, "representative": 10, "upper": 15}
+}

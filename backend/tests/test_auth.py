@@ -499,7 +499,12 @@ def test_weather_proposal_is_separate_until_accept_and_persists_revision(client:
     stale_accept = client.post(f"/api/v1/trips/{trip_id}/replan/weather/accept", headers={"Origin": ORIGIN},
         json={"proposal_id": stale_proposal["proposal_id"], "base_revision": stale_proposal["base_revision"]})
     assert stale_accept.status_code == 404
-    assert client.get(f"/api/v1/trips/{trip_id}").json()["latest_itinerary"] == saved["latest_itinerary"]
+    stale_view = client.get(f"/api/v1/trips/{trip_id}").json()
+    # The current budget response is an in-memory addition; after the trip is
+    # marked stale, its stored itinerary is returned without that current estimate.
+    assert stale_view["latest_itinerary"]["days"] == saved["latest_itinerary"]["days"]
+    assert stale_view["complete_budget_current"] is False
+    assert stale_view["itinerary_history"] == saved["itinerary_history"]
 
 
 def test_authenticated_pdf_export_uses_latest_persisted_one_and_multi_day_plans(client: TestClient):
@@ -632,6 +637,15 @@ def test_share_links_are_private_to_owners_reusable_revocable_and_read_only(clie
         "total_estimated": 1000, "per_person": 500, "daily_average": 1000,
         "budget_limit": 50000, "remaining_budget": 49000, "within_budget": True,
         "is_complete": True, "unknown_attraction_fee_count": 0, "last_updated": None,
+        "daily_attraction_fees": [{
+            "day_number": 1, "date": "2026-12-01", "scheduled_unique_attraction_count": 1,
+            "fee_counted_attraction_count": 1, "verified_fee_total": 0,
+            "estimated_fee_lower_total": 100, "estimated_fee_representative_total": 300,
+            "estimated_fee_upper_total": 1000, "representative_total": 300,
+            "lower_total": 100, "upper_total": 1000, "unresolved_attraction_count": 0,
+            "currency": "INR", "status": "estimated", "assumptions": ["Estimate, not a quote."],
+            "attractions": [{"attraction_id": "private-attraction-id", "status": "estimated"}],
+        }],
         "categories": [], "exclusions": [],
         "complete_budget": {
             "schema_version": 2, "currency": "INR",
@@ -651,7 +665,12 @@ def test_share_links_are_private_to_owners_reusable_revocable_and_read_only(clie
             "departure_minute": 660, "travel_minutes_before": 10, "cost": 0,
         }],
     }]}
-    trip.planning_inputs = {"attractions": []}
+    trip.planning_inputs = {"data_source": "osm", "attractions": [{
+        "id": "must-not-leak", "name": "City Palace", "category": "history",
+        "latitude": 24.5764, "longitude": 73.6835, "cost": 0,
+        "cost_known": False, "data_source": "osm", "visit_minutes": 60,
+        "preference_score": 0.8,
+    }]}
     db.commit()
     db.close()
 
@@ -681,6 +700,11 @@ def test_share_links_are_private_to_owners_reusable_revocable_and_read_only(clie
     assert public_budget["complete_budget"]["total_estimate"] is None
     assert public_budget["complete_budget"]["categories"][0]["amount"] is None
     assert public_budget["complete_budget"]["categories"][0]["status"] == "unavailable"
+    public_daily_fee = public_budget["daily_attraction_fees"][0]
+    assert public_daily_fee["estimated_fee_representative_total"] == 300
+    assert public_daily_fee["status"] == "estimated"
+    assert "attractions" not in public_daily_fee
+    assert "private-attraction-id" not in str(public_budget)
     assert "private_metadata" not in public_budget["complete_budget"]
     assert "private_internal_id" not in public_budget["complete_budget"]["categories"][0]
     assert "preferences" not in public_body

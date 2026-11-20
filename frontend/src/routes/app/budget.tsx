@@ -24,7 +24,7 @@ import {
 import { EmptyState, PageHeader } from "@/components/travel/PageHeader";
 import { TripBudgetEstimatePanel } from "@/components/travel/TripBudgetEstimatePanel";
 import { Button } from "@/components/ui/button";
-import { getTrip, getUserTrips, type AccountTrip, type TripDetails } from "@/lib/api";
+import { getUserTrips, type AccountTrip } from "@/lib/api";
 import { budgetStatus, buildBudgetDashboard } from "@/lib/budget-dashboard.mjs";
 
 export const Route = createFileRoute("/app/budget")({
@@ -51,23 +51,14 @@ const statusTone = {
 
 function Budget() {
   const [trips, setTrips] = useState<AccountTrip[]>([]);
-  const [tripDetails, setTripDetails] = useState<TripDetails[]>([]);
   const [selectedDailyTripId, setSelectedDailyTripId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let active = true;
     getUserTrips()
-      .then(async (items) => {
-        if (!active) return;
-        setTrips(items);
-        const withItineraries = items.filter((trip) => trip.latest_itinerary);
-        const details = await Promise.allSettled(withItineraries.map((trip) => getTrip(trip.id)));
-        if (active) {
-          setTripDetails(
-            details.flatMap((result) => (result.status === "fulfilled" ? [result.value] : [])),
-          );
-        }
+      .then((items) => {
+        if (active) setTrips(items);
       })
       .catch((cause) => {
         if (active)
@@ -81,7 +72,7 @@ function Budget() {
     };
   }, []);
 
-  const dashboard = useMemo(() => buildBudgetDashboard(trips, tripDetails), [trips, tripDetails]);
+  const dashboard = useMemo(() => buildBudgetDashboard(trips), [trips]);
   const categoryTotal = dashboard.categories.reduce(
     (sum, category) => sum + (category.amount ?? 0),
     0,
@@ -262,13 +253,14 @@ function Budget() {
                   into these category totals.
                 </p>
               )}
-              {trips.some(
-                (trip) =>
-                  (trip.latest_itinerary?.budget_estimate?.unknown_attraction_fee_count ?? 0) > 0,
-              ) && (
+              {(dashboard.attractionFeeStats.originalUnknownCount > 0 ||
+                dashboard.attractionFeeStats.estimatedCount > 0 ||
+                dashboard.attractionFeeStats.unresolvedCount > 0) && (
                 <p className="mt-3 rounded-lg bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-200">
-                  Some attraction fees are unknown and excluded from confirmed costs. A zero ticket
-                  estimate does not mean entry is free.
+                  Attraction fees: {dashboard.attractionFeeStats.originalUnknownCount} original
+                  catalog fee(s) unknown, {dashboard.attractionFeeStats.estimatedCount} estimated,
+                  and {dashboard.attractionFeeStats.unresolvedCount} still unresolved. Estimates are
+                  separate from verified catalog prices.
                 </p>
               )}
               {dashboard.incompleteBudgetTripCount > 0 && (
@@ -289,7 +281,7 @@ function Budget() {
             <section className="surface min-w-0 p-5 sm:p-6">
               <SectionHeading
                 title="Daily budget overview"
-                subtitle="Known attraction fees by itinerary day"
+                subtitle="Daily attraction fee estimates"
                 icon={<CalendarDays />}
               />
               {dashboard.dailyTrips.length > 1 && (
@@ -309,10 +301,10 @@ function Budget() {
                   </select>
                 </label>
               )}
-              {dashboard.dailyTrips.length > 0 ? (
+              {dashboard.dailyTrips.length > 0 && activeDailyTrip?.hasFeeData ? (
                 <div
                   className="mt-5 h-64 min-w-0"
-                  aria-label={`Known estimated activity costs by day for ${activeDailyTrip?.tripName ?? "selected trip"}`}
+                  aria-label={`Daily attraction fee estimates for ${activeDailyTrip.tripName}`}
                 >
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart
@@ -340,37 +332,85 @@ function Budget() {
                         tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
                         width={72}
                       />
-                      <Tooltip<number, string>
-                        formatter={(value, _name, item) => {
-                          const point = item.payload;
-                          return point.cost === null
-                            ? ["Cost unavailable", "Activity cost"]
-                            : [
-                                `${inr(Number(value))}${point.status === "partial" ? " · Partial" : ""}`,
-                                "Estimated activity fees",
-                              ];
+                      <Tooltip
+                        content={({ active, payload, label }) => {
+                          if (!active || !payload?.length) return null;
+                          const point = payload[0]?.payload;
+                          return (
+                            <div className="rounded-lg border border-border bg-background p-3 text-xs shadow-md">
+                              <p className="font-semibold">
+                                {label} · {point?.date}
+                              </p>
+                              <p>Verified fees: {inr(point?.verifiedAmount ?? 0)}</p>
+                              <p>
+                                Estimated fees: {inr(point?.estimatedAmount ?? 0)}
+                                {typeof point?.estimatedLower === "number" &&
+                                typeof point?.estimatedUpper === "number"
+                                  ? ` · range ${inr(point.estimatedLower)}–${inr(point.estimatedUpper)}`
+                                  : ""}
+                              </p>
+                              {point?.unknownCount > 0 && (
+                                <p>{point.unknownCount} attraction fee(s) unavailable</p>
+                              )}
+                              <p>
+                                {point?.scheduledUniqueCount ?? 0} unique scheduled attraction(s)
+                              </p>
+                            </div>
+                          );
                         }}
-                        labelFormatter={(label, payload) =>
-                          payload?.[0]?.payload?.date
-                            ? `${label} · ${payload[0].payload.date}`
-                            : label
-                        }
                       />
-                      <Bar dataKey="cost" name="Estimated activity fees" radius={[5, 5, 0, 0]}>
-                        {activeDailyTrip?.days.map((day) => (
+                      <Bar
+                        dataKey="verifiedAmount"
+                        name="Verified fees"
+                        stackId="fees"
+                        fill="#0f766e"
+                      />
+                      <Bar
+                        dataKey="estimatedAmount"
+                        name="Estimated fees"
+                        stackId="fees"
+                        fill="#a855f7"
+                        radius={[5, 5, 0, 0]}
+                      >
+                        {activeDailyTrip.days.map((day) => (
                           <Cell
                             key={day.dayNumber}
-                            fill={day.status === "partial" ? "#f59e0b" : "var(--primary)"}
+                            fill={day.status === "partial" ? "#f59e0b" : "#a855f7"}
                           />
                         ))}
                       </Bar>
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
+              ) : dashboard.dailyTrips.length > 0 ? (
+                <div className="mt-5 rounded-xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+                  {activeDailyTrip?.breakdownAvailable
+                    ? "No verified or estimated attraction fees are available for this trip's scheduled days. Unknown fees are not treated as free."
+                    : "Daily attraction fee estimates are unavailable for this saved itinerary. Regenerate the itinerary to create a current backend fee breakdown."}
+                </div>
               ) : (
                 <div className="mt-5 rounded-xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-                  Daily activity costs are unavailable because no saved itinerary with day-level
+                  Daily attraction fees are unavailable because no saved itinerary with day-level
                   activities is available yet.
+                </div>
+              )}
+              {activeDailyTrip?.hasFeeData && (
+                <div
+                  className="mt-2 flex flex-wrap gap-4 text-xs text-muted-foreground"
+                  aria-label="Daily fee chart legend"
+                >
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="h-2.5 w-2.5 rounded-sm bg-teal-700" />
+                    Verified fee
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="h-2.5 w-2.5 rounded-sm bg-purple-500" />
+                    Estimated fee
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="h-2.5 w-2.5 rounded-sm bg-amber-500" />
+                    Partial day
+                  </span>
                 </div>
               )}
               {activeDailyTrip && (
@@ -385,10 +425,21 @@ function Budget() {
                         <span className="ml-2 text-xs text-muted-foreground">{day.date}</span>
                       </span>
                       <span className="shrink-0 font-medium">
-                        {day.cost === null ? "Cost unavailable" : inr(day.cost)}
+                        {day.status === "no_attractions"
+                          ? "No attractions scheduled"
+                          : day.status === "already_counted"
+                            ? "Fees counted on an earlier day"
+                            : day.status === "unavailable"
+                              ? "Fee estimate unavailable"
+                              : `${day.knownCount ? `Verified ${inr(day.verifiedAmount ?? 0)}` : ""}${day.knownCount && day.estimatedCount ? " · " : ""}${day.estimatedCount ? `Estimated ${inr(day.estimatedAmount ?? 0)}` : ""}`}
                         {day.status === "partial" && (
                           <span className="ml-1 text-xs font-normal text-amber-700 dark:text-amber-300">
                             · Partial
+                          </span>
+                        )}
+                        {day.unknownCount > 0 && (
+                          <span className="ml-1 text-xs font-normal text-muted-foreground">
+                            · {day.unknownCount} unavailable
                           </span>
                         )}
                       </span>
@@ -398,8 +449,10 @@ function Budget() {
               )}
               {dashboard.dailyTrips.length > 0 && (
                 <p className="mt-3 text-xs text-muted-foreground">
-                  Activity costs are estimates based on available attraction fee data. Unknown fees
-                  are excluded, so some daily totals may be partial.
+                  Daily attraction fee estimates use the same verified and versioned estimates as
+                  the complete-trip budget. Estimated fees are not verified ticket prices. The chart
+                  excludes accommodation, food, transportation and miscellaneous costs; the
+                  optimizer's activity costs remain separate.
                 </p>
               )}
             </section>
@@ -580,6 +633,15 @@ function SectionHeading({
 function TripBudgetCard({ trip }: { trip: AccountTrip }) {
   const estimate = trip.latest_itinerary?.budget_estimate;
   const completeBudget = estimate?.complete_budget;
+  const attractionFeeCategory =
+    completeBudget?.categories?.find((category) => category.key === "attraction_fees") ??
+    estimate?.categories?.find((category) => category.key === "attractions");
+  const originalUnknownFees = estimate?.unknown_attraction_fee_count ?? 0;
+  const estimatedFees = attractionFeeCategory?.estimated_count ?? 0;
+  const unresolvedFees =
+    estimate?.unresolved_attraction_fee_count ??
+    attractionFeeCategory?.unresolved_count ??
+    Math.max(0, originalUnknownFees - estimatedFees);
   const completeIsCurrent = Boolean(completeBudget && trip.complete_budget_current);
   const total = completeIsCurrent ? completeBudget?.total_estimate : null;
   const remaining =
@@ -587,7 +649,9 @@ function TripBudgetCard({ trip }: { trip: AccountTrip }) {
       ? completeBudget.remaining_budget
       : null;
   const status =
-    completeIsCurrent && typeof total === "number" && typeof completeBudget?.within_budget === "boolean"
+    completeIsCurrent &&
+    typeof total === "number" &&
+    typeof completeBudget?.within_budget === "boolean"
       ? completeBudget?.within_budget === false
         ? { label: "Over Budget", tone: "danger" as const }
         : { label: "Within Estimated Range", tone: "success" as const }
@@ -641,10 +705,11 @@ function TripBudgetCard({ trip }: { trip: AccountTrip }) {
           emphasis={remaining !== null && remaining < 0}
         />
       </div>
-      {(estimate?.unknown_attraction_fee_count ?? 0) > 0 && (
+      {originalUnknownFees > 0 && (
         <p className="mt-3 text-xs text-amber-700 dark:text-amber-300">
-          {estimate?.unknown_attraction_fee_count} scheduled attraction fee(s) are unknown and not
-          included as confirmed costs.
+          Catalog amounts missing: {originalUnknownFees} · covered by estimates: {estimatedFees} ·
+          still unresolved: {unresolvedFees}. Estimates are planning assumptions, not verified
+          ticket prices.
         </p>
       )}
       {!completeBudget &&

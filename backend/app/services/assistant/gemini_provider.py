@@ -5,17 +5,23 @@ import logging
 import os
 import re
 import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from collections.abc import Sequence
 from typing import Any
 
 
 logger = logging.getLogger(__name__)
 
-REQUEST_TIMEOUT_SECONDS = 18
-TOTAL_REQUEST_TIMEOUT_SECONDS = 25
+# Gemini can return DEADLINE_EXCEEDED before the SDK's transport timeout. Leave
+# enough time for one bounded retry while still capping the whole provider call.
+REQUEST_TIMEOUT_SECONDS = 20
+TOTAL_REQUEST_TIMEOUT_SECONDS = 42
 CLIENT_CLEANUP_TIMEOUT_SECONDS = 1
 MAX_ATTEMPTS = 2
-RETRY_BACKOFF_SECONDS = 0.25
+RETRY_BACKOFF_SECONDS = 0.5
+MAX_RETRY_AFTER_SECONDS = 20
+RETRYABLE_PROVIDER_STATUS_CODES = {429, 500, 502, 503, 504}
 RETRYABLE_TRANSPORT_EXCEPTIONS = {
     "ConnectError",
     "ConnectTimeout",
@@ -82,6 +88,40 @@ def _status_code(exc: Exception) -> int | None:
         return int(code) if code is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _retry_after_seconds(exc: Exception) -> float | None:
+    """Read Retry-After from the SDK response without logging provider details."""
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+    try:
+        value = headers.get("Retry-After")
+    except Exception:
+        return None
+    if value is None:
+        return None
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        try:
+            retry_at = parsedate_to_datetime(str(value))
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=timezone.utc)
+            return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+
+def _retry_delay(exc: Exception, attempt: int) -> float | None:
+    """Return a bounded delay, or None when Retry-After exceeds our request budget."""
+    retry_after = _retry_after_seconds(exc)
+    if retry_after is not None:
+        if retry_after > MAX_RETRY_AFTER_SECONDS:
+            return None
+        return retry_after
+    return RETRY_BACKOFF_SECONDS * (2**attempt)
 
 
 def _safe_exception_message(exc: Exception, *, api_key: str, request_text: Sequence[str]) -> str:
@@ -186,6 +226,8 @@ async def generate_gemini_reply(
                 break
             except asyncio.TimeoutError as exc:
                 duration_ms = round((time.monotonic() - started) * 1_000)
+                remaining = deadline - time.monotonic()
+                delay = RETRY_BACKOFF_SECONDS * (2**attempt)
                 logger.warning(
                     "Gemini assistant provider=%s model=%s category=timeout stage=request_execution "
                     "exception_class=%s exception_message=%r duration_ms=%s request_attempt=%s "
@@ -194,6 +236,10 @@ async def generate_gemini_reply(
                     _safe_exception_message(exc, api_key=api_key, request_text=request_text),
                     duration_ms, request_attempt, retry_attempted,
                 )
+                if attempt + 1 < MAX_ATTEMPTS and remaining > delay + min(1.0, REQUEST_TIMEOUT_SECONDS):
+                    retry_attempted = True
+                    await asyncio.sleep(delay)
+                    continue
                 raise AssistantTimedOut from exc
             except errors.APIError as exc:
                 code = _status_code(exc)
@@ -206,13 +252,6 @@ async def generate_gemini_reply(
                     _safe_exception_message(exc, api_key=api_key, request_text=request_text),
                     duration_ms, request_attempt, code if code is not None else "none", retry_attempted,
                 )
-                if code == 429:
-                    logger.warning(
-                        "Gemini assistant provider=%s model=%s category=rate_limited "
-                        "duration_ms=%s status_code=%s retry_attempted=%s",
-                        "gemini", model, duration_ms, code, retry_attempted,
-                    )
-                    raise AssistantRateLimited from exc
                 if code in {401, 403}:
                     logger.warning(
                         "Gemini assistant provider=%s model=%s category=authentication "
@@ -220,15 +259,24 @@ async def generate_gemini_reply(
                         "gemini", model, duration_ms, code, retry_attempted,
                     )
                     raise AssistantNotConfigured from exc
+                if code in RETRYABLE_PROVIDER_STATUS_CODES and attempt + 1 < MAX_ATTEMPTS:
+                    remaining = deadline - time.monotonic()
+                    delay = _retry_delay(exc, attempt)
+                    # Keep time for an actual second attempt; a long Retry-After
+                    # is honored only when it still fits the bounded deadline.
+                    if delay is not None and remaining > delay + min(1.0, REQUEST_TIMEOUT_SECONDS):
+                        retry_attempted = True
+                        await asyncio.sleep(delay)
+                        continue
+                if code == 429:
+                    logger.warning(
+                        "Gemini assistant provider=%s model=%s category=rate_limited "
+                        "duration_ms=%s status_code=%s retry_attempted=%s",
+                        "gemini", model, duration_ms, code if code is not None else "none", retry_attempted,
+                    )
+                    raise AssistantRateLimited from exc
                 if code == 504:
                     raise AssistantTimedOut from exc
-                if code in {500, 502} and attempt + 1 < MAX_ATTEMPTS:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= RETRY_BACKOFF_SECONDS:
-                        raise AssistantTimedOut from exc
-                    retry_attempted = True
-                    await asyncio.sleep(RETRY_BACKOFF_SECONDS * (2**attempt))
-                    continue
                 logger.warning(
                     "Gemini assistant provider=%s model=%s category=%s duration_ms=%s "
                     "status_code=%s retry_attempted=%s",
@@ -249,6 +297,12 @@ async def generate_gemini_reply(
                         _safe_exception_message(exc, api_key=api_key, request_text=request_text),
                         duration_ms, request_attempt, retry_attempted,
                     )
+                    remaining = deadline - time.monotonic()
+                    delay = RETRY_BACKOFF_SECONDS * (2**attempt)
+                    if attempt + 1 < MAX_ATTEMPTS and remaining > delay + min(1.0, REQUEST_TIMEOUT_SECONDS):
+                        retry_attempted = True
+                        await asyncio.sleep(delay)
+                        continue
                     raise AssistantTimedOut from exc
                 retryable_transport = _is_retryable_transport_error(exc)
                 remaining = deadline - time.monotonic()

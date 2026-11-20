@@ -103,6 +103,7 @@ class TripPlanningOptions(BaseModel):
     luxury_level: int = Field(default=3, ge=1, le=5)
     meal_preferences: list[str] = Field(default_factory=list, max_length=12)
     miscellaneous_budget: float = Field(default=0, ge=0, le=5_000_000)
+    miscellaneous_budget_mode: Literal["automatic", "manual", "disabled"] | None = None
     intercity_transportation_mode: str | None = Field(default=None, max_length=40)
     intercity_outbound_cost: IntercityCostInput | None = None
     intercity_return_cost: IntercityCostInput | None = None
@@ -220,6 +221,11 @@ class AttractionInput(BaseModel):
     # Optional provenance accompanies the stable optimizer fields. Legacy callers
     # can omit every metadata field without changing optimizer behavior.
     cost_known: bool | None = None
+    fee_currency: str | None = Field(default=None, max_length=3)
+    fee_pricing_basis: Literal["per_person", "group"] | None = None
+    fee_status: Literal["verified", "estimated", "unavailable"] | None = None
+    fee_source: str | None = Field(default=None, max_length=120)
+    fee_assumptions: list[str] = Field(default_factory=list, max_length=20)
     catalog_category: str | None = Field(default=None, max_length=50)
     opening_hours: str | None = Field(default=None, max_length=500)
     opening_window_known: bool | None = None

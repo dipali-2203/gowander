@@ -10,7 +10,7 @@ const CATEGORY_DEFINITIONS = [
 
 const finite = (value) => typeof value === "number" && Number.isFinite(value);
 
-export function buildBudgetDashboard(trips, tripDetails = []) {
+export function buildBudgetDashboard(trips) {
   const estimateFor = (trip) => trip.latest_itinerary?.budget_estimate;
   const isCurrentComplete = (trip) =>
     trip.complete_budget_current === true &&
@@ -63,6 +63,11 @@ export function buildBudgetDashboard(trips, tripDetails = []) {
   const categorySums = new Map(CATEGORY_DEFINITIONS.map(({ key }) => [key, 0]));
   const categoryCoverage = new Map(CATEGORY_DEFINITIONS.map(({ key }) => [key, 0]));
   const categoryPartial = new Map(CATEGORY_DEFINITIONS.map(({ key }) => [key, false]));
+  const attractionFeeStats = {
+    originalUnknownCount: 0,
+    estimatedCount: 0,
+    unresolvedCount: 0,
+  };
   const legacyKeyMap = {
     transportation: "local_transport",
     meals: "food",
@@ -75,6 +80,23 @@ export function buildBudgetDashboard(trips, tripDetails = []) {
         ? estimate?.complete_budget?.categories
         : estimate?.categories;
     if (!Array.isArray(categories)) continue;
+    const unknownOriginal = estimate?.unknown_attraction_fee_count ?? 0;
+    attractionFeeStats.originalUnknownCount += finite(unknownOriginal) ? unknownOriginal : 0;
+    const feeCategory = categories.find((item) =>
+      categoryDataScope === "complete_trip"
+        ? item.key === "attraction_fees"
+        : item.key === "attractions",
+    );
+    attractionFeeStats.estimatedCount += finite(feeCategory?.estimated_count)
+      ? feeCategory.estimated_count
+      : 0;
+    const unresolved =
+      estimate?.unresolved_attraction_fee_count ??
+      feeCategory?.unresolved_count ??
+      (finite(feeCategory?.estimated_count) && finite(unknownOriginal)
+        ? Math.max(0, unknownOriginal - feeCategory.estimated_count)
+        : unknownOriginal);
+    attractionFeeStats.unresolvedCount += finite(unresolved) ? unresolved : 0;
     for (const category of categories) {
       const key =
         categoryDataScope === "complete_trip"
@@ -87,6 +109,17 @@ export function buildBudgetDashboard(trips, tripDetails = []) {
       }
       if (category.status === "partial" || category.status === "unavailable")
         categoryPartial.set(key, true);
+      if (key === "attraction_fees") {
+        const unresolvedCount =
+          typeof category.unresolved_count === "number"
+            ? category.unresolved_count
+            : (estimate?.unresolved_attraction_fee_count ??
+              (finite(category.estimated_count) && finite(estimate?.unknown_attraction_fee_count)
+                ? Math.max(0, estimate.unknown_attraction_fee_count - category.estimated_count)
+                : estimate?.unknown_attraction_fee_count) ??
+              0);
+        if (unresolvedCount > 0) categoryPartial.set(key, true);
+      }
     }
   }
   const categories = CATEGORY_DEFINITIONS.map((definition) => ({
@@ -95,11 +128,7 @@ export function buildBudgetDashboard(trips, tripDetails = []) {
     coverage: categoryCoverage.get(definition.key),
     partial:
       categoryCoverage.get(definition.key) < categoryTrips.length ||
-      categoryPartial.get(definition.key) ||
-      (definition.key === "attraction_fees" &&
-        categoryTrips.some(
-          (trip) => (trip.latest_itinerary?.budget_estimate?.unknown_attraction_fee_count ?? 0) > 0,
-        )),
+      categoryPartial.get(definition.key),
     percentage:
       categorySums.get(definition.key) > 0
         ? (categorySums.get(definition.key) /
@@ -111,53 +140,72 @@ export function buildBudgetDashboard(trips, tripDetails = []) {
         : 0,
   }));
 
-  const detailById = new Map(tripDetails.map((trip) => [trip.id, trip]));
   const dailyTrips = trips.flatMap((trip) => {
     if (trip.itinerary_stale === true) return [];
     const days = trip.latest_itinerary?.days;
     if (!Array.isArray(days)) return [];
-    const detail = detailById.get(trip.id);
-    const attractions = new Map(
-      (detail?.planning_inputs?.attractions ?? []).map((attraction) => [attraction.id, attraction]),
+    const dailyFees = estimateFor(trip)?.daily_attraction_fees;
+    const feesByDay = new Map(
+      (Array.isArray(dailyFees) ? dailyFees : []).map((day) => [day.day_number, day]),
     );
+    const breakdownAvailable = Array.isArray(dailyFees);
+    const mappedDays = days.map((day) => {
+      const feeDay = feesByDay.get(day.day_number);
+      if (!feeDay) {
+        return {
+          dayNumber: day.day_number,
+          date: day.date,
+          cost: null,
+          verifiedAmount: null,
+          estimatedAmount: null,
+          estimatedLower: null,
+          estimatedUpper: null,
+          knownCount: 0,
+          estimatedCount: 0,
+          unknownCount: 0,
+          scheduledUniqueCount: new Set((day.stops ?? []).map((stop) => stop.attraction_id)).size,
+          status: "unavailable",
+          assumptions: [],
+        };
+      }
+      const feeRecords = Array.isArray(feeDay.attractions) ? feeDay.attractions : [];
+      const knownCount = feeRecords.filter((fee) => fee.status === "verified").length;
+      const estimatedCount = feeRecords.filter((fee) => fee.status === "estimated").length;
+      const verifiedAmount = feeDay.verified_fee_total;
+      const estimatedAmount = feeDay.estimated_fee_representative_total;
+      const hasResolvedFee = knownCount + estimatedCount > 0;
+      const cost =
+        feeDay.status === "no_attractions"
+          ? 0
+          : feeDay.status === "already_counted"
+            ? null
+            : hasResolvedFee
+              ? feeDay.representative_total
+              : null;
+      return {
+        dayNumber: feeDay.day_number,
+        date: feeDay.date,
+        cost,
+        verifiedAmount,
+        estimatedAmount,
+        estimatedLower: feeDay.estimated_fee_lower_total,
+        estimatedUpper: feeDay.estimated_fee_upper_total,
+        knownCount,
+        estimatedCount,
+        unknownCount: feeDay.unresolved_attraction_count,
+        scheduledUniqueCount: feeDay.scheduled_unique_attraction_count,
+        status: feeDay.status,
+        assumptions: feeDay.assumptions ?? [],
+      };
+    });
     return [
       {
         tripId: trip.id,
         tripName: trip.name || trip.destination,
         destination: trip.destination,
-        days: days.map((day) => {
-          if (!Array.isArray(day.stops)) {
-            return {
-              dayNumber: day.day_number,
-              date: day.date,
-              cost: null,
-              knownCount: 0,
-              unknownCount: 0,
-              status: "unavailable",
-            };
-          }
-          let availableCost = 0;
-          let knownCount = 0;
-          let unknownCount = 0;
-          for (const stop of day.stops ?? []) {
-            const attraction = attractions.get(stop.attraction_id);
-            if (attraction?.cost_known === true && finite(attraction.cost)) {
-              availableCost += finite(stop.cost) ? stop.cost : attraction.cost;
-              knownCount += 1;
-            } else {
-              unknownCount += 1;
-            }
-          }
-          const cost = unknownCount === 0 ? availableCost : knownCount > 0 ? availableCost : null;
-          return {
-            dayNumber: day.day_number,
-            date: day.date,
-            cost,
-            knownCount,
-            unknownCount,
-            status: cost === null ? "unavailable" : unknownCount > 0 ? "partial" : "available",
-          };
-        }),
+        breakdownAvailable,
+        hasFeeData: mappedDays.some((day) => day.knownCount > 0 || day.estimatedCount > 0),
+        days: mappedDays,
       },
     ];
   });
@@ -174,6 +222,7 @@ export function buildBudgetDashboard(trips, tripDetails = []) {
     allEstimatesAvailable,
     categoryEstimateTripCount: categoryTrips.length,
     categoryDataScope,
+    attractionFeeStats,
     remainingBudget: allEstimatesAvailable ? allocatedBudget - estimatedCost : null,
     dailyAverage: travelDays > 0 ? estimatedCost / travelDays : null,
     categories,

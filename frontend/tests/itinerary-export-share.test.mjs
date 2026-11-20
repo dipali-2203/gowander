@@ -51,7 +51,7 @@ test("complete budget displays distinguish unavailable, partial, legacy and stal
     /category\.status === "unavailable" \|\| typeof category\.amount !== "number"/,
   );
   assert.doesNotMatch(budgetPanel, /category\.amount\s*\?\?\s*0/);
-  assert.match(budgetPanel, /Partial.*no known amount/);
+  assert.match(budgetPanel, /available estimate · partial/);
   assert.match(budgetPanel, /Destination-only estimate/);
   assert.match(budgetPanel, /Trip budget needs refresh/);
   assert.match(budgetPanel, /budget\.within_budget === true/);

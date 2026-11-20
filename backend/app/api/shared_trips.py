@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import Trip, TripShare
+from app.services.budget import estimate_saved_itinerary_budget
 from app.services.weather import ATTRIBUTION as WEATHER_ATTRIBUTION
 from app.services.trip_sharing import verify_share_token
 
@@ -15,7 +16,8 @@ router = APIRouter(prefix="/api/v1/shared", tags=["Shared itineraries"])
 
 
 def _public_itinerary(trip: Trip) -> dict:
-    itinerary = trip.latest_itinerary if isinstance(trip.latest_itinerary, dict) else {}
+    itinerary = estimate_saved_itinerary_budget(trip)
+    itinerary = itinerary if isinstance(itinerary, dict) else {}
     planning = trip.planning_inputs if isinstance(trip.planning_inputs, dict) else {}
     options = trip.planning_options if isinstance(trip.planning_options, dict) else {}
     days = []
@@ -84,6 +86,13 @@ def _public_itinerary(trip: Trip) -> dict:
                         "confidence": item.get("confidence"),
                         "range_min": item.get("range_min"),
                         "range_max": item.get("range_max"),
+                        "verified_amount": item.get("verified_amount"),
+                        "estimated_amount": item.get("estimated_amount"),
+                        "verified_count": item.get("verified_count"),
+                        "estimated_count": item.get("estimated_count"),
+                        "unresolved_count": item.get("unresolved_count"),
+                        "sources": [str(value) for value in item.get("sources", []) or []],
+                        "estimate_config_version": item.get("estimate_config_version"),
                         "mode": item.get("mode"),
                         "unit_basis": item.get("unit_basis"),
                         "amount_basis": item.get("amount_basis"),
@@ -120,6 +129,22 @@ def _public_itinerary(trip: Trip) -> dict:
             "within_budget": estimate.get("within_budget"),
             "is_complete": estimate.get("is_complete", False),
             "unknown_attraction_fee_count": estimate.get("unknown_attraction_fee_count", 0),
+            "unresolved_attraction_fee_count": estimate.get("unresolved_attraction_fee_count", 0),
+            "daily_attraction_fees": [
+                {
+                    key: item.get(key)
+                    for key in (
+                        "day_number", "date", "scheduled_unique_attraction_count",
+                        "fee_counted_attraction_count", "verified_fee_total",
+                        "estimated_fee_lower_total", "estimated_fee_representative_total",
+                        "estimated_fee_upper_total", "representative_total", "lower_total",
+                        "upper_total", "unresolved_attraction_count", "currency", "status",
+                        "assumptions",
+                    )
+                }
+                for item in estimate.get("daily_attraction_fees", []) or []
+                if isinstance(item, dict)
+            ],
             "categories": [
                 {
                     "key": str(item.get("key") or "unknown"),

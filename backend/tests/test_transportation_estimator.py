@@ -43,15 +43,16 @@ def test_passenger_modes_multiply_by_travelers_and_car_is_per_vehicle(monkeypatc
     assert four_car["amount"] == one_car["amount"]
 
 
-def test_mode_not_decided_returns_mode_range_not_a_false_selected_mode(monkeypatch):
+def test_mode_not_decided_keeps_separate_ranges_without_a_blended_total(monkeypatch):
     estimate = route(monkeypatch, travelers=2, mode=None)
     outbound = estimate["outbound"]
     assert estimate["provisional"] is True
     assert outbound["mode"] is None
     assert set(outbound["mode_estimates"]) == {"train", "bus", "flight", "private_car"}
-    assert outbound["range_min"] == min(item["range_min"] for item in outbound["mode_estimates"].values())
-    assert outbound["range_max"] == max(item["range_max"] for item in outbound["mode_estimates"].values())
-    assert "provisional" in " ".join(outbound["assumptions"]).lower()
+    assert outbound["status"] == "unavailable"
+    assert outbound["amount"] is outbound["range_min"] is outbound["range_max"] is None
+    assert "mode has not been selected" in " ".join(outbound["assumptions"]).lower()
+    assert all(item["status"] == "estimated" for item in outbound["mode_estimates"].values())
 
 
 def test_outbound_and_return_are_separate_records_with_same_model_assumption(monkeypatch):

@@ -22,6 +22,7 @@ import {
   getAttractionCatalog,
   getTravelPreferences,
   getTransportationEstimate,
+  type MiscellaneousBudgetMode,
   type TransportationEstimatePreview,
 } from "@/lib/api";
 import { useTripStore } from "@/store/trip";
@@ -108,6 +109,8 @@ function Planner() {
     outboundCost: "",
     returnCost: "",
     hotelBudget: "mid",
+    miscellaneousMode: "automatic" as MiscellaneousBudgetMode,
+    miscellaneousAmount: "0",
     travellers: 2,
     luxury: [3],
     riskTolerance: [0.3],
@@ -279,6 +282,17 @@ function Planner() {
       const destination = form.to.trim();
       const outboundCost = form.outboundCost.trim() ? Number(form.outboundCost) : null;
       const returnCost = form.returnCost.trim() ? Number(form.returnCost) : null;
+      const miscellaneousAmount = form.miscellaneousAmount.trim()
+        ? Number(form.miscellaneousAmount)
+        : 0;
+      if (
+        form.miscellaneousMode === "manual" &&
+        (!Number.isFinite(miscellaneousAmount) ||
+          miscellaneousAmount < 0 ||
+          miscellaneousAmount > 5_000_000)
+      ) {
+        throw new Error("Enter a non-negative miscellaneous amount up to ₹5,000,000.");
+      }
       if (
         (outboundCost !== null &&
           (!Number.isFinite(outboundCost) || outboundCost < 0 || outboundCost > 5_000_000)) ||
@@ -302,7 +316,8 @@ function Planner() {
                 ? "luxury"
                 : "standard",
         luxuryLevel: form.luxury[0] ?? 3,
-        miscellaneousBudget: 0,
+        miscellaneousBudget: form.miscellaneousMode === "manual" ? miscellaneousAmount : 0,
+        miscellaneousBudgetMode: form.miscellaneousMode,
         intercityTransportationMode: form.intercityTransport || null,
         intercityOutboundCost: outboundCost,
         intercityReturnCost: returnCost,
@@ -582,7 +597,35 @@ function Planner() {
                             <p className="text-xs font-medium capitalize text-muted-foreground">
                               {direction} · {cost.mode ?? "mode not decided"}
                             </p>
-                            {cost.status === "estimated" && typeof cost.amount === "number" ? (
+                            {cost.mode_estimates && cost.status === "unavailable" ? (
+                              <div className="mt-2 space-y-2">
+                                <p className="font-medium">Choose a mode to use an estimate</p>
+                                {Object.entries(cost.mode_estimates).map(([mode, option]) => (
+                                  <div
+                                    className="rounded-md border bg-background/70 p-2"
+                                    key={mode}
+                                  >
+                                    <p className="text-xs font-medium capitalize">
+                                      {mode.replaceAll("_", " ")}
+                                    </p>
+                                    {typeof option.range_min === "number" &&
+                                    typeof option.range_max === "number" ? (
+                                      <p className="text-xs text-muted-foreground">
+                                        Indicative {option.range_min.toLocaleString("en-IN")}–
+                                        {option.range_max.toLocaleString("en-IN")} INR · whole group
+                                      </p>
+                                    ) : (
+                                      <p className="text-xs text-muted-foreground">
+                                        Estimate unavailable
+                                      </p>
+                                    )}
+                                    <p className="text-xs text-muted-foreground">
+                                      {option.unit_basis?.replaceAll("_", " ")} pricing
+                                    </p>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : cost.status === "estimated" && typeof cost.amount === "number" ? (
                               <p className="font-semibold">
                                 ₹{cost.amount.toLocaleString("en-IN")} representative
                               </p>
@@ -618,8 +661,8 @@ function Planner() {
                       })}
                       <p className="text-xs text-muted-foreground sm:col-span-2">
                         {transportEstimate.distance_basis === "osrm_road_route"
-                          ? "Private-car range uses an OSRM road route."
-                          : "Road distances for car, bus and rail remain route approximations."}
+                          ? "Private-car range uses an OSRM road route; train distance remains a straight-line proxy."
+                          : "Train distance uses a straight-line proxy; bus and private-car ranges use straight-line-derived road-distance proxies."}
                         {transportEstimate.attribution
                           ? ` Geocoding: ${transportEstimate.attribution}.`
                           : ""}
@@ -664,6 +707,65 @@ function Planner() {
                       <SelectItem value="lux">₹15,000+</SelectItem>
                     </SelectContent>
                   </Select>
+                </div>
+                <div className="space-y-3 rounded-xl border border-border p-4">
+                  <div>
+                    <Label htmlFor="miscellaneous-mode">Miscellaneous allowance</Label>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      A whole-trip allowance for incidental expenses.
+                    </p>
+                  </div>
+                  <Select
+                    value={form.miscellaneousMode}
+                    onValueChange={(value) =>
+                      setForm({
+                        ...form,
+                        miscellaneousMode: value as MiscellaneousBudgetMode,
+                      })
+                    }
+                  >
+                    <SelectTrigger id="miscellaneous-mode">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="automatic">Automatic estimate</SelectItem>
+                      <SelectItem value="manual">Manual amount</SelectItem>
+                      <SelectItem value="disabled">No allowance</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {form.miscellaneousMode === "automatic" ? (
+                    <p className="text-xs text-muted-foreground" role="status">
+                      The representative estimate is 10% of the other six budget categories, with an
+                      indicative 5–15% range. It may be provisional when those categories have
+                      unavailable or partial costs. The planner calculates it after the itinerary is
+                      generated.
+                    </p>
+                  ) : form.miscellaneousMode === "manual" ? (
+                    <>
+                      <div className="space-y-2">
+                        <Label htmlFor="miscellaneous-amount">Manual whole-trip amount (INR)</Label>
+                        <Input
+                          id="miscellaneous-amount"
+                          type="number"
+                          min="0"
+                          max="5000000"
+                          step="1"
+                          inputMode="decimal"
+                          value={form.miscellaneousAmount}
+                          onChange={(event) =>
+                            setForm({ ...form, miscellaneousAmount: event.target.value })
+                          }
+                        />
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        This amount, including an explicit ₹0, overrides the automatic estimate.
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      Miscellaneous expenses are excluded from the estimate.
+                    </p>
+                  )}
                 </div>
               </>
             )}

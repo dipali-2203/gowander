@@ -12,6 +12,8 @@ function clock(minute: number) {
   return `${String(Math.floor(minute / 60) % 24).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
 }
 
+const inr = (value: number) => `₹${value.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+
 function SharedItineraryPage() {
   const { token } = Route.useParams();
   const [trip, setTrip] = useState<SharedItinerary | null>(null);
@@ -127,6 +129,61 @@ function SharedItineraryPage() {
                 completeBudgetCurrent={trip.budget_estimate.complete_budget_current === true}
                 estimateIsCurrent={trip.budget_estimate.estimate_is_current !== false}
               />
+            ) : null}
+            {trip.budget_estimate?.daily_attraction_fees?.length ? (
+              <section
+                className="surface space-y-3 p-5"
+                aria-label="Daily attraction fee estimates"
+              >
+                <div>
+                  <h2 className="font-semibold">Daily attraction fee estimates</h2>
+                  <p className="text-xs text-muted-foreground">
+                    Uses the same backend estimates as the complete trip budget; estimates are not
+                    verified ticket prices.
+                  </p>
+                </div>
+                <ul className="grid gap-2 sm:grid-cols-2">
+                  {trip.budget_estimate.daily_attraction_fees.map((day) => (
+                    <li
+                      key={`${day.day_number}-${day.date}`}
+                      className="rounded-lg bg-muted/50 px-3 py-2 text-sm"
+                    >
+                      <div className="flex justify-between gap-3">
+                        <span className="font-medium">
+                          Day {day.day_number}{" "}
+                          <span className="text-xs font-normal text-muted-foreground">
+                            {day.date}
+                          </span>
+                        </span>
+                        <span className="text-right">
+                          {day.status === "no_attractions"
+                            ? "No attractions scheduled"
+                            : day.status === "already_counted"
+                              ? "Fees counted on an earlier day"
+                              : day.status === "unavailable"
+                                ? "Fee estimate unavailable"
+                                : `Verified ${inr(day.verified_fee_total)} · Estimated ${inr(day.estimated_fee_representative_total)}`}
+                        </span>
+                      </div>
+                      {day.unresolved_attraction_count > 0 && (
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {day.unresolved_attraction_count} fee(s) unresolved; unknown fees are
+                          excluded.
+                        </p>
+                      )}
+                      {day.status !== "no_attractions" &&
+                        day.status !== "already_counted" &&
+                        typeof day.estimated_fee_lower_total === "number" &&
+                        typeof day.estimated_fee_upper_total === "number" && (
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            Estimated range: {inr(day.estimated_fee_lower_total)}–
+                            {inr(day.estimated_fee_upper_total)}
+                          </p>
+                        )}
+                    </li>
+                  ))}
+                </ul>
+              </section>
             ) : null}
             {trip.selected_accommodation ? (
               <section className="surface space-y-2 p-5">

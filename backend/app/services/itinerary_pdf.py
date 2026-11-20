@@ -82,7 +82,14 @@ def _document_lines(trip: Any) -> list[tuple[str, str]]:
 
     days = itinerary.get("days") if isinstance(itinerary.get("days"), list) else []
     planning = trip.planning_inputs if isinstance(trip.planning_inputs, dict) else {}
-    attraction_fees = {
+    estimate = itinerary.get("budget_estimate")
+    has_fee_details = isinstance(estimate, dict) and isinstance(estimate.get("attraction_fee_details"), list)
+    attraction_fee_details = {
+        item.get("attraction_id"): item
+        for item in (estimate.get("attraction_fee_details", []) if isinstance(estimate, dict) else [])
+        if isinstance(item, dict) and item.get("attraction_id")
+    }
+    legacy_fee_known = {
         item.get("id"): item.get("cost_known")
         for item in planning.get("attractions", [])
         if isinstance(item, dict) and item.get("id")
@@ -114,9 +121,19 @@ def _document_lines(trip: Any) -> list[tuple[str, str]]:
             arrival = int(entry.get("arrival_minute") or 0)
             departure = int(entry.get("departure_minute") or arrival)
             duration = max(0, departure - arrival)
-            fee_known = attraction_fees.get(entry.get("attraction_id"))
-            fee_value = entry.get("cost")
-            fee = _inr(fee_value) if fee_known is True and fee_value is not None else "Fee unknown"
+            fee_detail = attraction_fee_details.get(entry.get("attraction_id"), {})
+            if fee_detail.get("status") == "verified" and isinstance(fee_detail.get("representative"), (int, float)):
+                fee = f"Verified fee {_inr(fee_detail['representative'])}"
+            elif fee_detail.get("status") == "estimated" and isinstance(fee_detail.get("representative"), (int, float)):
+                fee = f"Estimated fee allowance {_inr(fee_detail['representative'])} (not verified)"
+            elif (
+                not has_fee_details
+                and legacy_fee_known.get(entry.get("attraction_id")) is True
+                and entry.get("cost") is not None
+            ):
+                fee = f"Fee {_inr(entry['cost'])} (legacy saved estimate)"
+            else:
+                fee = "Fee unavailable"
             lines.append((
                 "bullet",
                 f"{_clock(arrival)}–{_clock(departure)} · {entry.get('name') or 'Activity'} · "
@@ -136,7 +153,29 @@ def _document_lines(trip: Any) -> list[tuple[str, str]]:
                             f"{condition}. {advisory.get('description')}",
                         ))
 
-    estimate = itinerary.get("budget_estimate")
+    if isinstance(estimate, dict) and isinstance(estimate.get("daily_attraction_fees"), list):
+        lines.extend([("space", ""), ("section", "Daily attraction fee estimates")])
+        for fee_day in estimate["daily_attraction_fees"]:
+            if not isinstance(fee_day, dict):
+                continue
+            day_label = f"Day {fee_day.get('day_number', '?')} · {fee_day.get('date', '')}".strip(" ·")
+            if fee_day.get("status") == "no_attractions":
+                summary = "No attractions scheduled."
+            elif fee_day.get("status") == "already_counted":
+                summary = "Repeated attraction fee(s) were counted on their first scheduled day."
+            elif fee_day.get("status") == "unavailable":
+                summary = f"Fee estimate unavailable for {fee_day.get('unresolved_attraction_count', 0)} attraction(s)."
+            else:
+                verified = fee_day.get("verified_fee_total")
+                estimated = fee_day.get("estimated_fee_representative_total")
+                summary = f"Verified: {_inr(verified)} · Estimated: {_inr(estimated)} (not verified)"
+                if fee_day.get("status") == "partial":
+                    summary += f" · {fee_day.get('unresolved_attraction_count', 0)} unresolved"
+            lines.append(("body", f"{day_label}: {summary}"))
+            if isinstance(fee_day.get("estimated_fee_lower_total"), (int, float)) and isinstance(fee_day.get("estimated_fee_upper_total"), (int, float)):
+                lines.append(("small", f"Estimated fee range: {_inr(fee_day['estimated_fee_lower_total'])}–{_inr(fee_day['estimated_fee_upper_total'])}"))
+        lines.append(("small", "Daily fees use the same backend estimate as the complete budget; they exclude other trip expenses."))
+
     if isinstance(estimate, dict):
         complete = estimate.get("complete_budget")
         is_stale = bool(getattr(trip, "itinerary_stale", False))
@@ -155,7 +194,11 @@ def _document_lines(trip: Any) -> list[tuple[str, str]]:
                 if status == "Unavailable" or amount is None:
                     value = "Unavailable"
                 elif status == "Partial":
-                    value = f"{_inr(amount)} known subtotal (partial)" if amount > 0 else "Partial; no known amount"
+                    has_estimate = isinstance(category.get("estimated_amount"), (int, float)) and category["estimated_amount"] > 0
+                    has_verified = isinstance(category.get("verified_amount"), (int, float)) and category["verified_amount"] > 0
+                    value = (f"{_inr(amount)} available estimate (partial)" if has_estimate else
+                             f"{_inr(amount)} known subtotal (partial)" if has_verified or amount > 0 else
+                             "Partial; no known amount")
                 else:
                     value = _inr(amount)
                 lines.append(("body", f"{label}: {value} ({status})"))
@@ -181,6 +224,12 @@ def _document_lines(trip: Any) -> list[tuple[str, str]]:
             lines.append(("body", f"Complete trip total: {_inr(total)}"))
             if isinstance(complete.get("total_estimate_range_min"), (int, float)) and isinstance(complete.get("total_estimate_range_max"), (int, float)):
                 lines.append(("small", f"Indicative total range: {_inr(complete['total_estimate_range_min'])}–{_inr(complete['total_estimate_range_max'])}; budget checks use the upper bounds."))
+            limit = complete.get("budget_limit")
+            upper = complete.get("total_estimate_range_max")
+            if isinstance(limit, (int, float)) and isinstance(total, (int, float)) and total > limit:
+                lines.append(("body", f"Representative estimate over budget by {_inr(total - limit)}."))
+            if isinstance(limit, (int, float)) and isinstance(upper, (int, float)) and upper > limit:
+                lines.append(("body", f"Upper-range estimate over budget by {_inr(upper - limit)}."))
             if total is None:
                 lines.append(("small", "The budget is incomplete; unknown costs are not counted as zero."))
             elif complete.get("within_budget") is True:

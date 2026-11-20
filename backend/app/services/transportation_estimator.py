@@ -178,18 +178,14 @@ def estimate_intercity_transport(
         for item, direction in ((outbound, "Outbound"), (returning, "Return")):
             item["assumptions"] = [*item["assumptions"], f"{direction} leg uses the same configured distance model; no direction-specific schedules or fares were available."]
     else:
-        available = [item for item in by_mode.values() if item.get("status") == "estimated"]
-        low = min((item["range_min"] for item in available), default=None)
-        high = max((item["range_max"] for item in available), default=None)
-        representative = round((low + high) / 2, 2) if low is not None and high is not None else None
-        assumptions = ["Provisional mode-agnostic planning allowance spanning available train, bus, flight, and private-car models; select a mode to narrow it.", "Not a confirmed fare; modeled ranges are configuration assumptions."]
+        assumptions = ["No single intercity estimate is available because a transportation mode has not been selected.", "The mode-specific amounts below are separate configurable planning ranges, not live fares or availability."]
         if road_basis != "osrm_road_route":
-            assumptions.append("Private-car leg uses a provisional road-distance proxy, not a verified road route.")
-        outbound = {"status": "estimated" if representative is not None else "unavailable", "amount": representative, "representative_amount": representative,
-                    "range_min": low, "range_max": high, "mode": None, "unit_basis": "mode_agnostic",
+            assumptions.append("Private-car and bus distance calculations use a straight-line-derived road-distance proxy, not a verified road route.")
+        outbound = {"status": "unavailable", "amount": None, "representative_amount": None,
+                    "range_min": None, "range_max": None, "mode": None, "unit_basis": None,
                     "amount_basis": "whole_group_total",
                     "traveler_count": travelers, "estimated_at": datetime.now(timezone.utc).isoformat(),
-                    "source": "configurable_transport_model", "method": "provisional_mode_range", "assumptions": assumptions,
+                    "source": None, "method": "mode_not_selected", "assumptions": assumptions,
                     "mode_estimates": by_mode}
         returning = {**outbound, "assumptions": [*assumptions, "Return leg is a separate category using the same mode-agnostic configured model; no directional fare data is available."]}
     geocoding_note = "Coordinates were supplied by the traveler." if origin_location.get("source") == "provided_coordinates" and destination_location.get("source") == "provided_coordinates" else "City coordinates resolved through the configured Nominatim geocoder; place matching may be approximate. © OpenStreetMap contributors."
